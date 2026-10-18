@@ -1,0 +1,27 @@
+# 运行时数据与密钥
+data/
+log/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 前端
+web/node_modules/
+web/dist/
+server/webroot/
+
+# 构建/测试产物
+*.db
+*.db-wal
+*.db-shm
+*.zip
+!web/package-lock.json
+
+# 编辑器与工具
+.idea/
+.vscode/
+.DS_Store
+.workbuddy/

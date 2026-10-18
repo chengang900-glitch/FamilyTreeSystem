@@ -1,0 +1,16 @@
+server:
+  host: 127.0.0.1
+  port: 8100
+  debug: false
+
+paths:
+  database: data/app.db
+  uploads: data/uploads
+  backups: data/backups
+  webroot: server/webroot
+  secret_key_file: data/secret.key
+
+gunicorn:
+  workers: 2
+  threads: 4
+  timeout: 120

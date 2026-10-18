@@ -1,0 +1,18 @@
+# 构建上下文排除项：缩小镜像构建体积，避免把密钥/数据库打进镜像
+.git
+.gitignore
+.venv
+.workbuddy
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+log
+data
+web/node_modules
+web/dist
+server/webroot
+docs
+scripts
+*.md
+deploy/certs

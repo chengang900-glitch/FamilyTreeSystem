@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: family-tree-system:latest
+    container_name: fts-app
+    environment:
+      - TZ=Asia/Shanghai
+      - FTS_HOST=0.0.0.0
+      - FTS_PORT=8000
+      # 配置随镜像提供（/app/config.yaml），需要改参数时挂载同名文件覆盖
+      - FTS_CONFIG=/app/config.yaml
+      # 仅采信来自容器网段（Nginx）的 X-Forwarded-For，公网直连的伪造头一律忽略
+      - FTS_TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12
+    volumes:
+      - appdata:/app/data
+      # 如需覆盖配置：取消下一行注释并准备好 deploy/config.yaml
+      # - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+    # 公网部署请仅在容器网络内暴露，由 nginx 对外
+    expose:
+      - "8000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: fts-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  appdata:
