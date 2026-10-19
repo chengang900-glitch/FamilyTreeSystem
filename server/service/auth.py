@@ -1,5 +1,7 @@
 """认证：密码哈希、JWT 签发与校验、登录锁定"""
+import os
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +14,8 @@ from server.db.conn import query_one, execute
 from server.service import settings
 
 ACCESS_COOKIE = 'fts_token'
+REFRESH_COOKIE = 'fts_refresh'
+_secret_lock = threading.Lock()
 
 
 def _secret() -> str:
@@ -19,14 +23,26 @@ def _secret() -> str:
     if key:
         return key
     path = Path(current_app.config['SECRET_KEY_FILE'])
-    if path.exists():
-        key = path.read_text(encoding='utf-8').strip()
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_hex(32)
-        path.write_text(key, encoding='utf-8')
-    current_app.config['SECRET_KEY'] = key
-    return key
+    with _secret_lock:
+        key = current_app.config.get('SECRET_KEY')
+        if key:
+            return key
+        if path.exists():
+            key = path.read_text(encoding='utf-8').strip()
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            key = secrets.token_hex(32)
+            path.write_text(key, encoding='utf-8')
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        current_app.config['SECRET_KEY'] = key
+        return key
 
 
 def hash_password(raw: str) -> str:
@@ -52,35 +68,68 @@ def validate_password(raw: str):
     return None
 
 
-def issue_token(user_row, remember=False) -> str:
-    hours = settings.get_int('security.refresh_days', 7) * 24 if remember \
-        else settings.get_int('security.session_hours', 8)
+def _access_hours():
+    return max(settings.get_int('security.session_hours', 8), 1)
+
+
+def _refresh_days():
+    return max(settings.get_int('security.refresh_days', 7), 1)
+
+
+def _encode(user_row, kind, lifetime):
+    now = datetime.now(timezone.utc)
     payload = {
         'uid': user_row['id'],
         'tv': user_row['token_version'],
-        'exp': datetime.now(timezone.utc) + timedelta(hours=hours),
-        'iat': datetime.now(timezone.utc),
+        'typ': kind,
+        'exp': now + lifetime,
+        'iat': now,
     }
     return jwt.encode(payload, _secret(), algorithm='HS256')
 
 
-def decode_token(token: str):
+def issue_token(user_row, remember=False) -> str:
+    """访问令牌：固定 8h（可通过 security.session_hours 调整）。"""
+    return _encode(user_row, 'access', timedelta(hours=_access_hours()))
+
+
+def issue_refresh_token(user_row, remember=False) -> str:
+    """刷新令牌：记住登录时 7d；否则与访问令牌同寿命，且使用会话 Cookie。"""
+    lifetime = timedelta(days=_refresh_days()) if remember \
+        else timedelta(hours=_access_hours())
+    return _encode(user_row, 'refresh', lifetime)
+
+
+def decode_token(token: str, kind=None):
     try:
-        return jwt.decode(token, _secret(), algorithms=['HS256'])
-    except jwt.PyJWTError:
+        payload = jwt.decode(token, _secret(), algorithms=['HS256'])
+    except (jwt.PyJWTError, KeyError):
         return None
+    if kind and payload.get('typ', 'access' if kind == 'access' else None) != kind:
+        return None
+    return payload
 
 
-def user_from_token(token: str):
-    payload = decode_token(token)
-    if not payload:
+def _user_from_payload(payload):
+    uid = payload.get('uid') if payload else None
+    if not uid:
         return None
-    row = query_one('SELECT * FROM users WHERE id=?', (payload['uid'],))
+    row = query_one('SELECT * FROM users WHERE id=?', (uid,))
     if row is None or row['status'] != 1:
         return None
     if row['token_version'] != payload.get('tv'):
         return None
     return row
+
+
+def user_from_token(token: str):
+    payload = decode_token(token, kind='access')
+    return _user_from_payload(payload)
+
+
+def user_from_refresh_token(token: str):
+    payload = decode_token(token, kind='refresh')
+    return _user_from_payload(payload)
 
 
 def is_locked(row) -> bool:
@@ -108,18 +157,45 @@ def clear_fail(user_id):
 
 
 def cookie_max_age(remember=False) -> int:
-    if remember:
-        return settings.get_int('security.refresh_days', 7) * 86400
-    return settings.get_int('security.session_hours', 8) * 3600
+    return _access_hours() * 3600
+
+
+def refresh_cookie_max_age(remember=False):
+    return _refresh_days() * 86400 if remember else None
+
+
+def _cookie_path(path):
+    return os.environ.get('FTS_BASE_PATH', '').rstrip('/') + path
+
+
+def _cookie_kwargs(path, max_age):
+    return {
+        'httponly': True,
+        'samesite': 'Strict',
+        'secure': settings.get_bool('security.force_https', False),
+        'max_age': max_age,
+        'path': _cookie_path(path),
+    }
+
+
+def set_auth_cookies(resp, access_token, refresh_token=None, remember=False):
+    """统一下发访问 Cookie + 刷新 Cookie（httpOnly + SameSite=Strict）。"""
+    resp.set_cookie(ACCESS_COOKIE, access_token,
+                    **_cookie_kwargs('/', cookie_max_age(remember)))
+    if refresh_token:
+        resp.set_cookie(REFRESH_COOKIE, refresh_token,
+                        **_cookie_kwargs('/api/auth', refresh_cookie_max_age(remember)))
+    return resp
 
 
 def set_auth_cookie(resp, token: str, remember=False):
-    """统一下发会话 Cookie（httpOnly + SameSite=Strict + 可选 Secure）"""
-    resp.set_cookie(
-        ACCESS_COOKIE, token,
-        httponly=True, samesite='Strict',
-        secure=settings.get_bool('security.force_https', False),
-        max_age=cookie_max_age(remember), path='/')
+    """兼容旧调用：只设置访问 Cookie。"""
+    return set_auth_cookies(resp, token, None, remember)
+
+
+def clear_auth_cookies(resp):
+    resp.delete_cookie(ACCESS_COOKIE, path=_cookie_path('/'))
+    resp.delete_cookie(REFRESH_COOKIE, path=_cookie_path('/api/auth'))
     return resp
 
 

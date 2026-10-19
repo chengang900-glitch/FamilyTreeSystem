@@ -3,9 +3,10 @@
 FROM node:22-alpine AS web
 WORKDIR /web
 COPY web/package*.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+RUN npm ci --registry=https://registry.npmmirror.com
 COPY web/ ./
-RUN npm run build
+ARG VITE_BASE_PATH=/
+RUN VITE_BASE_PATH="$VITE_BASE_PATH" npm run build
 
 # 阶段二：运行时
 FROM python:3.13-slim

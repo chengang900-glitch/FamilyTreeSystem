@@ -4,10 +4,49 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request, send_file
 
+from server.common import ApiError
 from server.db.conn import query, query_one
-from server.service import audit
+from server.service import audit, privacy, valid
 from server.service.permission import current_user, require_family, require_login
-from server.service.printutil import paper_size, register_font
+from server.service.printutil import PAPER_MM, render_pdf, render_docx
+
+
+def _bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return default
+
+
+def _body():
+    """统一校验付印入参，避免字符串/对象落到排版代码触发 500。"""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        raise ApiError('请求体需为 JSON 对象')
+    mode = body.get('mode', 'lineage')
+    if mode not in ('lineage', 'person'):
+        raise ApiError('付印模式不合法')
+    paper = body.get('paper', 'A4')
+    if not isinstance(paper, str) or paper.upper() not in PAPER_MM:
+        raise ApiError('纸张参数不合法')
+    paper = paper.upper()
+    template = body.get('template', 'original')
+    if not isinstance(template, str) or template not in ('original', 'traditional', 'european', 'compilation'):
+        raise ApiError('付印模板不合法')
+    generations = valid.to_int(body.get('generations'), 'generations', default=0)
+    root_id = valid.to_int(body.get('root_id'), 'root_id', minimum=1) \
+        if body.get('root_id') is not None else None
+    if body.get('compiler') is not None and not isinstance(body['compiler'], str):
+        raise ApiError('修辑者署名必须为文本')
+    return {
+        **body, 'mode': mode, 'paper': paper, 'template': template, 'generations': generations, 'root_id': root_id,
+        'add_cover': _bool(body.get('add_cover'), True),
+        'include_spouse': _bool(body.get('include_spouse'), False),
+        'include_children': _bool(body.get('include_children'), False),
+    }
 
 bp = Blueprint('print', __name__, url_prefix='/api/families')
 
@@ -15,7 +54,8 @@ bp = Blueprint('print', __name__, url_prefix='/api/families')
 def _load(family_id, root_id, mode, generations):
     fam = query_one('SELECT * FROM family WHERE id=?', (family_id,))
     persons = query('SELECT * FROM person WHERE family_id=? ORDER BY generation, id', (family_id,))
-    pmap = {p['id']: dict(p) for p in persons}
+    # 付印与详情页共用脱敏规则，普通成员不能借导出 PDF/Word 绕过隐私设置
+    pmap = {p['id']: privacy.mask_person(p) for p in persons}
     children = {}
     for r in query('SELECT parent_id, child_id FROM parentchild WHERE family_id=?', (family_id,)):
         children.setdefault(r['parent_id'], []).append(r['child_id'])
@@ -25,6 +65,8 @@ def _load(family_id, root_id, mode, generations):
         spouses.setdefault(m['spouse2_id'], []).append(m['spouse1_id'])
 
     if mode == 'person' and root_id:
+        if root_id not in pmap:
+            raise ApiError('主人物不存在或不属于本家谱')
         keep = set()
         stack = [root_id]
         while stack:
@@ -35,15 +77,22 @@ def _load(family_id, root_id, mode, generations):
             stack.extend(children.get(pid, []))
         items = [pmap[i] for i in sorted(keep, key=lambda x: (pmap[x]['generation'], x))]
     else:
-        items = [dict(p) for p in persons]
-        if generations and generations > 0:
-            base = min((p['generation'] for p in items), default=1)
-            items = [p for p in items if p['generation'] < base + generations]
+        items = [pmap[p['id']] for p in persons]
+    if mode == 'person' and not root_id:
+        raise ApiError('请选择主人物')
+    if generations and generations > 0:
+        base = pmap[root_id]['generation'] if mode == 'person' else min((p['generation'] for p in items), default=1)
+        items = [p for p in items if p['generation'] < base + generations]
     return fam, items, pmap, children, spouses
 
 
 def _lines(fam, items, pmap, children, spouses, opts):
     out = []
+    parents = {}
+    if opts.get('template', 'original') != 'original':
+        for parent, kids in children.items():
+            for child in kids:
+                parents.setdefault(child, []).append(parent)
     by_gen = {}
     for p in items:
         by_gen.setdefault(p['generation'], []).append(p)
@@ -54,52 +103,48 @@ def _lines(fam, items, pmap, children, spouses, opts):
             extra = ' '.join(x for x in (p['courtesy_name'] and f"字{p['courtesy_name']}",
                                          p['art_name'] and f"号{p['art_name']}") if x)
             out.append(('p', f"{name}{('　' + extra) if extra else ''}"))
+            known_parents = [pmap[pid]['name'] for pid in parents.get(p['id'], []) if pid in pmap]
+            if known_parents:
+                out.append(('s', '父母：' + '、'.join(known_parents)))
             born = p['birth_date'] or '生年不详'
             dead = p['death_date'] or '在世'
             out.append(('s', f"{born} — {dead}"))
+            if p['birth_place']:
+                out.append(('s', f"生于：{p['birth_place']}"))
+            for field, label in (('address', '住址'), ('phone', '手机号'), ('company', '单位/公司'), ('position', '职位')):
+                if p.get(field):
+                    out.append(('s', f'{label}：{p[field]}'))
             if p['bury_address']:
                 out.append(('s', f"葬：{p['bury_address']}"))
             if opts.get('include_spouse'):
                 for sid in spouses.get(p['id'], []):
                     sp = pmap.get(sid)
                     if sp:
-                        out.append(('s', f"配：{sp['name']}"
+                        label = '妻' if sp['type'] in (2, 3, 6) else '夫'
+                        out.append(('s', f"{label}：{sp['name']}"
                                     f"{('（' + sp['birth_date'] + '）') if sp['birth_date'] else ''}"))
+                        if sp['record']:
+                            out.append(('s', sp['record']))
             if opts.get('include_children'):
-                kids = [pmap[c]['name'] for c in children.get(p['id'], []) if c in pmap]
-                if kids:
-                    out.append(('s', "子：" + '、'.join(kids)))
+                for label, kinds in (('子', (1, 4, 5)), ('女', (2, 3, 6))):
+                    kids = [pmap[c]['name'] for c in children.get(p['id'], []) if c in pmap and pmap[c]['type'] in kinds]
+                    if kids:
+                        out.append(('s', label + '：' + '、'.join(kids)))
             if p['record']:
                 out.append(('s', p['record']))
             out.append(('gap', ''))
     return out
 
 
-# 各类内容行占用的纵向高度（与 print_pdf 的排版保持一致）
-LINE_HEIGHTS = {'h': 30, 'p': 16, 's': 13, 'gap': 6}
-
-
-def _count_pages(content, page_height, margin=42) -> int:
-    usable = page_height - 2 * margin - 40
-    y, pages = usable, 1
-    for kind, _ in content:
-        if y < 0:
-            pages += 1
-            y = usable
-        y -= LINE_HEIGHTS.get(kind, 13)
-    return pages
-
-
 @bp.post('/<int:family_id>/print/estimate')
 @require_login
 @require_family('member')
 def estimate(family_id):
-    body = request.get_json(silent=True) or {}
+    body = _body()
     fam, items, pmap, children, spouses = _load(
         family_id, body.get('root_id'), body.get('mode', 'lineage'), body.get('generations'))
-    _, height = paper_size(body.get('paper', 'A4'))
     content = _lines(fam, items, pmap, children, spouses, body)
-    pages = _count_pages(content, height) + (1 if body.get('add_cover', True) else 0)
+    _, pages = render_pdf(fam, content, body)
     return jsonify({'code': 0, 'msg': 'ok',
                     'data': {'persons': len(items), 'pages': pages}})
 
@@ -108,74 +153,12 @@ def estimate(family_id):
 @require_login
 @require_family('member')
 def print_pdf(family_id):
-    from reportlab.lib import colors
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.pdfgen import canvas
-
-    body = request.get_json(silent=True) or {}
+    body = _body()
     fam, items, pmap, children, spouses = _load(
         family_id, body.get('root_id'), body.get('mode', 'lineage'), body.get('generations'))
-    font = register_font()
-    width, height = paper_size(body.get('paper', 'A4'))
-    margin = 42
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(width, height))
-    title_font = font
     now = datetime.now(timezone(timedelta(hours=8)))
-    page_no = 0
-
-    def new_page():
-        nonlocal page_no
-        page_no += 1
-        c.setFont(font, 9)
-        c.setFillColor(colors.HexColor('#888888'))
-        c.drawCentredString(width / 2, 24, f"— {page_no} —")
-        c.setFillColor(colors.black)
-        return margin, height - margin
-
-    x, y = new_page()
-
-    if body.get('add_cover', True):
-        cx = width / 2
-        title = fam['name'] if fam else '族谱'
-        c.setFont(title_font, 26)
-        cy = height - height * 0.30
-        for i, ch in enumerate(title):
-            c.drawCentredString(cx, cy - i * 30, ch)
-        c.setFont(font, 11)
-        compiler = body.get('compiler') or (fam['compiler'] if fam and fam['compiler'] else '')
-        if compiler:
-            c.drawCentredString(cx, 150, f"{compiler}　修辑")
-        c.drawCentredString(cx, 130, f"{now.strftime('%Y 年 %m 月')}　成谱")
-        c.showPage()
-        x, y = new_page()
-
-    content = _lines(fam, items, pmap, children, spouses, body)
-    for kind, text in content:
-        if y < margin + 40:
-            c.showPage()
-            x, y = new_page()
-        if kind == 'h':
-            y -= 10
-            c.setFont(font, 14)
-            c.setFillColor(colors.HexColor('#8c6b4f'))
-            c.drawString(margin, y, text)
-            c.setFillColor(colors.black)
-            y -= 20
-        elif kind == 'p':
-            c.setFont(font, 12)
-            c.drawString(margin, y, text)
-            y -= 16
-        elif kind == 's':
-            c.setFont(font, 9)
-            c.setFillColor(colors.HexColor('#555555'))
-            c.drawString(margin + 14, y, text)
-            c.setFillColor(colors.black)
-            y -= 13
-        elif kind == 'gap':
-            y -= 6
-    c.save()
-    buf.seek(0)
+    blob, _ = render_pdf(fam, _lines(fam, items, pmap, children, spouses, body), body)
+    buf = io.BytesIO(blob)
     audit.log(current_user()['id'], family_id, 'print_pdf', 'family', family_id)
     stamp = now.strftime('%Y%m%d')
     return send_file(buf, as_attachment=True,
@@ -187,37 +170,13 @@ def print_pdf(family_id):
 @require_login
 @require_family('member')
 def print_docx(family_id):
-    from docx import Document
-    from docx.shared import Pt
-
-    body = request.get_json(silent=True) or {}
+    body = _body()
+    if body['template'] not in ('original', 'compilation'):
+        raise ApiError('所选模板仅支持 PDF 导出，请选择 PDF')
     fam, items, pmap, children, spouses = _load(
         family_id, body.get('root_id'), body.get('mode', 'lineage'), body.get('generations'))
-    doc = Document()
-    style = doc.styles['Normal']
-    style.font.name = 'Microsoft YaHei'
-    style.font.size = Pt(11)
-
     now = datetime.now(timezone(timedelta(hours=8)))
-    if body.get('add_cover', True):
-        doc.add_heading(fam['name'] if fam else '族谱', level=0)
-        compiler = body.get('compiler') or (fam['compiler'] if fam and fam['compiler'] else '')
-        if compiler:
-            doc.add_paragraph(f'{compiler}　修辑')
-        doc.add_paragraph(f"{now.strftime('%Y 年 %m 月')}　成谱")
-        doc.add_page_break()
-
-    for kind, text in _lines(fam, items, pmap, children, spouses, body):
-        if kind == 'h':
-            doc.add_heading(text, level=2)
-        elif kind == 'p':
-            doc.add_paragraph(text)
-        elif kind == 's':
-            p = doc.add_paragraph(text)
-            p.paragraph_format.left_indent = Pt(18)
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
+    buf = io.BytesIO(render_docx(fam, _lines(fam, items, pmap, children, spouses, body), body))
     audit.log(current_user()['id'], family_id, 'print_docx', 'family', family_id)
     return send_file(buf, as_attachment=True,
                      download_name=f'{(fam["name"] if fam else "族谱")}_{now.strftime("%Y%m%d")}.docx',

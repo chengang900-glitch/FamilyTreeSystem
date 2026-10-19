@@ -39,6 +39,15 @@ def family_role(family_id, role='member'):
     user = current_user()
     if user is None:
         raise ApiError('未登录或登录已过期', code=401)
+    fam = query_one('SELECT status FROM family WHERE id=?', (family_id,))
+    if fam is None:
+        # 对普通用户不暴露家谱是否存在，统一返回无权限
+        if user['is_superuser']:
+            raise ApiError('家谱不存在', code=404)
+        raise ApiError('无权访问该家谱', code=403)
+    # 归档家谱不再允许普通成员访问；超管仍可维护
+    if fam['status'] != 1 and not user['is_superuser']:
+        raise ApiError('该家谱已归档，暂不可访问', code=403)
     if user['is_superuser']:
         return 'admin'
     row = query_one('SELECT role FROM family_members WHERE family_id=? AND user_id=?',

@@ -87,7 +87,7 @@ check('删除有亲子关系的成员被拒',
       admin.delete(f'/api/families/{fid}/persons/{people[0]}').status_code == 400)
 
 print('== 越权与隔离 ==')
-r = admin.post('/api/admin/users', json={'username': 'm2_viewer', 'password': 'test1234'})
+r = admin.post('/api/admin/users', json={'username': 'm2_viewer', 'password': 'test1234', 'must_change_pwd': False})
 vid = r.get_json()['data']['id']
 viewer = app.test_client()
 viewer.post('/api/auth/login', json={'username': 'm2_viewer', 'password': 'test1234'})

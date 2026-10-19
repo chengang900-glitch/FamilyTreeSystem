@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
-  Button, Card, Checkbox, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message,
+  Button, Card, Form, Input, Modal, Pagination, Popconfirm, Segmented, Select, Space, Table, Tag, message,
 } from 'antd'
 import { PlusOutlined, TeamOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { useStore } from '../store'
+import MemberPicker from '../components/MemberPicker'
+import ColumnSettings, { useColumnSettings } from '../components/ColumnSettings'
 import { PERSON_TYPES } from '../constants'
 
 interface Row {
@@ -18,27 +20,52 @@ interface Row {
   person_count: number
 }
 
+interface MemberRow {
+  id: number
+  name: string
+  generation: number
+  type: number
+  branch_name?: string
+}
+
 export default function Branches() {
   const { user, familyId } = useStore()
   const fam = user?.families.find((f) => f.id === familyId)
   const writeable = !!fam && (fam.role === 'admin' || !!user?.is_superuser)
   const [rows, setRows] = useState<Row[]>([])
-  const [people, setPeople] = useState<any[]>([])
+  const [allBranches, setAllBranches] = useState<Row[]>([])
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const size = user?.page_size || 50
+  const [view, setView] = useState<'table' | 'card'>(
+    () => (localStorage.getItem('fts_branch_view') === 'card' ? 'card' : 'table'))
+  const cols = useColumnSettings<any>('fts_branch_cols')
+  const columnMeta = [
+    { key: 'name', title: '分支名称' },
+    { key: 'parent', title: '上级分支' },
+    { key: 'hall_name', title: '堂号' },
+    { key: 'generation_chars', title: '字辈' },
+    { key: 'origin_place', title: '发源地' },
+    { key: 'person_count', title: '人数' },
+    { key: 'actions', title: '操作' },
+  ]
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
   const [form] = Form.useForm()
-  const [selected, setSelected] = useState<number[]>([])
-  const [filterType, setFilterType] = useState<number | undefined>()
-  const [filterGen, setFilterGen] = useState<number | undefined>()
-  const [memberModal, setMemberModal] = useState<Row | null>(null)
-  const [memberIds, setMemberIds] = useState<number[]>([])
+  const [memberFor, setMemberFor] = useState<Row | null>(null)
+  const [memberRows, setMemberRows] = useState<MemberRow[]>([])
+  const [memberPage, setMemberPage] = useState(1)
+  const [memberTotal, setMemberTotal] = useState(0)
+  const [addIds, setAddIds] = useState<number[]>([])
+  const [removeIds, setRemoveIds] = useState<number[]>([])
 
   const load = async () => {
     if (!familyId) return
     try {
-      setRows(await api.get(`/api/families/${familyId}/branches`))
-      const p = await api.get(`/api/families/${familyId}/persons?size=500`)
-      setPeople(p.items)
+      const d = await api.get(`/api/families/${familyId}/branches?page=${page}&size=${size}`)
+      setRows(d.items)
+      setTotal(d.total)
+      setAllBranches(await api.get(`/api/families/${familyId}/branches?all=1`))
     } catch (e: any) {
       message.error(e.message)
     }
@@ -46,29 +73,37 @@ export default function Branches() {
 
   useEffect(() => {
     load()
-  }, [familyId])
+  }, [familyId, page, size])
 
-  const openEdit = async (row: Row | null) => {
-    setEditing(row)
-    if (row) {
-      const inBranch = people.filter((p) => p.branch_id === row.id).map((p) => p.id)
-      setSelected(inBranch)
-      form.setFieldsValue(row)
-    } else {
-      setSelected([])
-      form.resetFields()
+  const loadMembers = async (branchId: number, p: number) => {
+    try {
+      const d = await api.get(
+        `/api/families/${familyId}/persons?branch_id=${branchId}&page=${p}&size=${size}`)
+      setMemberRows(d.items)
+      setMemberTotal(d.total)
+      if (!d.items.length && p > 1) setMemberPage(Math.max(1, Math.ceil(d.total / size)))
+    } catch (e: any) {
+      message.error(e.message)
     }
+  }
+
+  useEffect(() => {
+    if (memberFor) loadMembers(memberFor.id, memberPage)
+  }, [memberFor?.id, memberPage])
+
+  const openEdit = (row: Row | null) => {
+    setEditing(row)
+    if (row) form.setFieldsValue(row)
+    else form.resetFields()
+    if (!row) form.setFieldValue('person_ids', [])
     setOpen(true)
   }
 
   const save = async () => {
     const v = await form.validateFields()
     try {
-      if (editing) {
-        await api.put(`/api/families/${familyId}/branches/${editing.id}`, { ...v, person_ids: selected })
-      } else {
-        await api.post(`/api/families/${familyId}/branches`, { ...v, person_ids: selected })
-      }
+      if (editing) await api.put(`/api/families/${familyId}/branches/${editing.id}`, v)
+      else await api.post(`/api/families/${familyId}/branches`, v)
       message.success('已保存')
       setOpen(false)
       load()
@@ -77,24 +112,51 @@ export default function Branches() {
     }
   }
 
-  const filtered = people.filter(
-    (p) => (!filterType || p.type === filterType) && (!filterGen || p.generation === filterGen),
-  )
-
   const openMembers = (row: Row) => {
-    setMemberModal(row)
-    setMemberIds(people.filter((p) => p.branch_id === row.id).map((p) => p.id))
+    setMemberFor(row)
+    setMemberPage(1)
+    setAddIds([])
+    setRemoveIds([])
   }
 
-  const saveMembers = async () => {
-    const before = people.filter((p) => p.branch_id === memberModal!.id).map((p) => p.id)
-    const add = memberIds.filter((i) => !before.includes(i))
-    const remove = before.filter((i) => !memberIds.includes(i))
-    await api.post(`/api/families/${familyId}/branches/${memberModal!.id}/members`,
-      { add_ids: add, remove_ids: remove })
-    message.success('成员归属已更新')
-    setMemberModal(null)
+  const refreshMembers = async () => {
+    if (!memberFor) return
+    if (memberRows.length === 1 && memberPage > 1) {
+      setMemberPage(memberPage - 1)
+      load()
+      return
+    }
+    await loadMembers(memberFor.id, memberPage)
     load()
+  }
+
+  const addMember = async () => {
+    if (!memberFor || !addIds.length) {
+      message.warning('请选择要加入的成员')
+      return
+    }
+    try {
+      await api.post(`/api/families/${familyId}/branches/${memberFor.id}/members`,
+        { add_ids: addIds })
+      setAddIds([])
+      setRemoveIds([])
+      message.success('已加入分支')
+      await refreshMembers()
+    } catch (e: any) {
+      message.error(e.message)
+    }
+  }
+
+  const removeMember = async (id: number) => {
+    if (!memberFor) return
+    try {
+      await api.post(`/api/families/${familyId}/branches/${memberFor.id}/members`,
+        { remove_ids: [id] })
+      message.success('已移出分支')
+      await refreshMembers()
+    } catch (e: any) {
+      message.error(e.message)
+    }
   }
 
   return (
@@ -108,22 +170,39 @@ export default function Branches() {
         )
       }
     >
+      <Space wrap style={{ marginBottom: 12 }}>
+        <ColumnSettings columns={columnMeta} hidden={cols.hidden} onToggle={cols.toggle} />
+        <Segmented
+          size="small"
+          value={view}
+          onChange={(v) => {
+            const next = v as 'table' | 'card'
+            setView(next)
+            localStorage.setItem('fts_branch_view', next)
+          }}
+          options={[{ value: 'table', label: '列表' }, { value: 'card', label: '卡片' }]}
+        />
+      </Space>
+      {view === 'table' ? (
       <Table
         rowKey="id"
         dataSource={rows}
+        pagination={{ current: page, pageSize: size, total, onChange: setPage, showSizeChanger: false }}
         scroll={{ x: 900 }}
-        columns={[
-          { title: '分支名称', dataIndex: 'name', width: 140 },
+        columns={cols.visible([
+          { key: 'name', title: '分支名称', dataIndex: 'name', width: 140 },
           {
+            key: 'parent',
             title: '上级分支',
             width: 120,
-            render: (_: any, r: Row) => rows.find((b) => b.id === r.parent_id)?.name || '-',
+            render: (_: any, r: Row) => allBranches.find((b) => b.id === r.parent_id)?.name || '-',
           },
-          { title: '堂号', dataIndex: 'hall_name', width: 110 },
-          { title: '字辈', dataIndex: 'generation_chars', width: 140 },
-          { title: '发源地', dataIndex: 'origin_place', width: 120 },
-          { title: '人数', dataIndex: 'person_count', width: 80 },
+          { key: 'hall_name', title: '堂号', dataIndex: 'hall_name', width: 110 },
+          { key: 'generation_chars', title: '字辈', dataIndex: 'generation_chars', width: 140 },
+          { key: 'origin_place', title: '发源地', dataIndex: 'origin_place', width: 120 },
+          { key: 'person_count', title: '人数', dataIndex: 'person_count', width: 80 },
           {
+            key: 'actions',
             title: '操作',
             width: 190,
             fixed: 'right',
@@ -146,15 +225,53 @@ export default function Branches() {
                 </Space>
               ) : null,
           },
-        ]}
+        ])}
       />
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12 }}>
+            {rows.map((r) => (
+              <Card key={r.id} size="small" title={r.name}
+                extra={<Tag color="blue">{r.person_count} 人</Tag>}>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <span style={{ fontSize: 12, color: '#888' }}>
+                    上级：{allBranches.find((b) => b.id === r.parent_id)?.name || '-'}
+                  </span>
+                  <span style={{ fontSize: 12, color: '#888' }}>
+                    堂号：{r.hall_name || '-'}　字辈：{r.generation_chars || '-'}
+                  </span>
+                  <span style={{ fontSize: 12, color: '#888' }}>发源地：{r.origin_place || '-'}</span>
+                  <span style={{ fontSize: 13 }}>{r.description || '无简介'}</span>
+                  {writeable && (
+                    <Space wrap size={4}>
+                      <Button size="small" icon={<TeamOutlined />} onClick={() => openMembers(r)}>成员</Button>
+                      <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
+                      <Popconfirm title="删除后其成员将归为未分配，确认删除？"
+                        onConfirm={async () => {
+                          await api.del(`/api/families/${familyId}/branches/${r.id}`)
+                          load()
+                        }}>
+                        <Button size="small" danger>删除</Button>
+                      </Popconfirm>
+                    </Space>
+                  )}
+                </Space>
+              </Card>
+            ))}
+          </div>
+          {total > size && (
+            <Pagination simple current={page} pageSize={size} total={total}
+              onChange={setPage} style={{ textAlign: 'center', marginTop: 12 }} />
+          )}
+        </>
+      )}
 
       <Modal
         open={open}
         title={editing ? '编辑分支' : '新建分支'}
         onCancel={() => setOpen(false)}
         onOk={save}
-        width={760}
+        width={850}
         destroyOnClose
       >
         <Form form={form} layout="vertical">
@@ -166,7 +283,7 @@ export default function Branches() {
               <Select
                 allowClear
                 style={{ width: 160 }}
-                options={rows
+                options={allBranches
                   .filter((b) => !editing || b.id !== editing.id)
                   .map((b) => ({ value: b.id, label: b.name }))}
               />
@@ -184,91 +301,63 @@ export default function Branches() {
           <Form.Item name="description" label="家族训 / 简介">
             <Input.TextArea rows={2} />
           </Form.Item>
+          {!editing && <Form.Item name="person_ids" label="初始成员（可筛选、跨页勾选）">
+            <MemberPicker />
+          </Form.Item>}
         </Form>
-
-        <div style={{ marginTop: 8 }}>
-          <Space wrap style={{ marginBottom: 8 }}>
-            <b>分支成员（已选 {selected.length} 人）</b>
-            <Select
-              allowClear
-              placeholder="按类型筛选"
-              style={{ width: 120 }}
-              value={filterType}
-              onChange={setFilterType}
-              options={Object.entries(PERSON_TYPES).map(([k, v]) => ({ value: Number(k), label: v }))}
-            />
-            <Select
-              allowClear
-              placeholder="按世代筛选"
-              style={{ width: 120 }}
-              value={filterGen}
-              onChange={setFilterGen}
-              options={Array.from({ length: 20 }, (_, i) => ({ value: i + 1, label: `第 ${i + 1} 世` }))}
-            />
-            <Button
-              size="small"
-              onClick={() => setSelected(Array.from(new Set([...selected, ...filtered.map((p) => p.id)])))}
-            >
-              全选
-            </Button>
-            <Button size="small" onClick={() => setSelected([])}>取消选中</Button>
-          </Space>
-          <Checkbox.Group
-            style={{ width: '100%' }}
-            value={selected}
-            onChange={(v) => setSelected(v as number[])}
-          >
-            <div style={{ maxHeight: 240, overflow: 'auto', border: '1px solid #f0f0f0', padding: 8 }}>
-              {filtered.map((p) => (
-                <Checkbox key={p.id} value={p.id} style={{ margin: '2px 0', width: '33%' }}>
-                  {p.name}
-                  <Tag style={{ marginLeft: 4 }}>{PERSON_TYPES[p.type]}</Tag>
-                </Checkbox>
-              ))}
-              {filtered.length === 0 && <div style={{ color: '#999' }}>暂无可选成员</div>}
-            </div>
-          </Checkbox.Group>
-        </div>
       </Modal>
 
       <Modal
-        open={!!memberModal}
-        title={`批量归入 - ${memberModal?.name}`}
-        onCancel={() => setMemberModal(null)}
-        onOk={saveMembers}
+        open={!!memberFor}
+        title={`分支成员 - ${memberFor?.name}`}
+        onCancel={() => setMemberFor(null)}
+        footer={null}
         width={720}
         destroyOnClose
       >
-        <Space wrap style={{ marginBottom: 8 }}>
-          <Select
-            allowClear
-            placeholder="按类型筛选"
-            style={{ width: 120 }}
-            value={filterType}
-            onChange={setFilterType}
-            options={Object.entries(PERSON_TYPES).map(([k, v]) => ({ value: Number(k), label: v }))}
-          />
-          <Button
-            size="small"
-            onClick={() => setMemberIds(Array.from(new Set([...memberIds, ...filtered.map((p) => p.id)])))}
-          >
-            全选
-          </Button>
-          <Button size="small" onClick={() => setMemberIds([])}>取消选中</Button>
+        <Card size="small" title="批量加入成员" style={{ marginBottom: 16 }}>
+          <MemberPicker key={memberFor?.id} value={addIds} onChange={setAddIds} />
+          <Button type="primary" onClick={addMember} disabled={!addIds.length}>将所选 {addIds.length} 人加入分支</Button>
+        </Card>
+        <Space style={{ marginBottom: 8 }}>
+          <span>当前分支成员</span>
+          <Popconfirm title={`确认将所选 ${removeIds.length} 人移出分支？`} onConfirm={async () => {
+            try {
+              await api.post(`/api/families/${familyId}/branches/${memberFor!.id}/members`, { remove_ids: removeIds })
+              setRemoveIds([])
+              await refreshMembers()
+            } catch (e: any) { message.error(e.message) }
+          }}>
+            <Button danger disabled={!removeIds.length}>批量移出所选成员</Button>
+          </Popconfirm>
         </Space>
-        <Checkbox.Group
-          style={{ width: '100%' }}
-          value={memberIds}
-          onChange={(v) => setMemberIds(v as number[])}
-        >
-          <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #f0f0f0', padding: 8 }}>
-            {filtered.map((p) => (
-              <Checkbox key={p.id} value={p.id} style={{ margin: '2px 0', width: '33%' }}>
-                {p.name}（第{p.generation}世）
-              </Checkbox>
-            ))}
-          </div>
-        </Checkbox.Group>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={memberRows}
+          rowSelection={{ selectedRowKeys: removeIds, preserveSelectedRowKeys: true, onChange: ids => setRemoveIds(ids.map(Number)) }}
+          pagination={{
+            current: memberPage,
+            pageSize: size,
+            total: memberTotal,
+            onChange: setMemberPage,
+            showSizeChanger: false,
+          }}
+          columns={[
+            { title: '姓名', dataIndex: 'name' },
+            { title: '世代', dataIndex: 'generation', width: 80, render: (g: number) => `第${g}世` },
+            { title: '类型', dataIndex: 'type', width: 100, render: (t: number) => PERSON_TYPES[t] },
+            {
+              title: '操作',
+              width: 90,
+              render: (_, r: MemberRow) => (
+                <Popconfirm title="确认移出该分支？" onConfirm={() => removeMember(r.id)}>
+                  <Button size="small" danger>移出</Button>
+                </Popconfirm>
+              ),
+            },
+          ]}
+        />
       </Modal>
     </Card>
   )

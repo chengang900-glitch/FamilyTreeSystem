@@ -4,6 +4,7 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { api } from '../../api'
+import { useStore } from '../../store'
 
 interface FamilyRow {
   id: number
@@ -18,6 +19,7 @@ interface FamilyRow {
 }
 
 export default function Families() {
+  const { user } = useStore()
   const [rows, setRows] = useState<FamilyRow[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<FamilyRow | null>(null)
@@ -87,6 +89,7 @@ export default function Families() {
       <Table
         rowKey="id"
         dataSource={rows}
+        pagination={{ pageSize: user?.page_size || 50 }}
         scroll={{ x: 900 }}
         columns={[
           { title: '名称', dataIndex: 'name', width: 160 },
@@ -95,12 +98,6 @@ export default function Families() {
           { title: '标识', dataIndex: 'slug', width: 100 },
           { title: '成员数', dataIndex: 'member_count', width: 90 },
           { title: '族人数', dataIndex: 'person_count', width: 90 },
-          {
-            title: '可见性',
-            width: 100,
-            render: (_, r) =>
-              r.visibility === 2 ? <Tag color="blue">公开只读</Tag> : <Tag>仅成员</Tag>,
-          },
           {
             title: '状态',
             width: 80,
@@ -167,14 +164,6 @@ export default function Families() {
           </Form.Item>
           <Form.Item name="generation_frozen" label="冻结字辈" valuePropName="checked">
             <Switch />
-          </Form.Item>
-          <Form.Item name="visibility" label="可见性">
-            <Select
-              options={[
-                { value: 0, label: '仅成员可见' },
-                { value: 2, label: '公开只读（需系统设置开启）' },
-              ]}
-            />
           </Form.Item>
           <Form.Item name="status" label="正常状态" valuePropName="checked">
             <Switch />

@@ -105,7 +105,7 @@ export default function FamilyMembers() {
       {writeable && (
         <Space wrap style={{ marginBottom: 12 }}>
           <Input.Search
-            placeholder="搜索账号/姓名/手机号"
+            placeholder="输入完整账号或姓名"
             value={kw}
             onChange={(e) => search(e.target.value)}
             style={{ width: 240 }}
@@ -135,7 +135,8 @@ export default function FamilyMembers() {
         </Space>
       )}
       {writeable && (
-        <Table rowKey="id" dataSource={rows} columns={columns as any} />
+        <Table rowKey="id" dataSource={rows} columns={columns as any}
+          pagination={{ pageSize: user?.page_size || 50 }} />
       )}
     </Card>
   )

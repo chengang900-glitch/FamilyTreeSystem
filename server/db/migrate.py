@@ -178,3 +178,75 @@ def ensure_constraints(con, schema_path):
     finally:
         con.execute(f'PRAGMA foreign_keys={1 if fk else 0}')
         con.execute(f'PRAGMA legacy_alter_table={1 if legacy else 0}')
+
+
+def ensure_profile_fields(con, backup_dir):
+    """增量补联系方式与日期统计列；旧库变更前快照，保留历史文本和重复次序。"""
+    import sqlite3
+    from datetime import datetime
+    from pathlib import Path
+    from server.service.dates import DATE_FIELDS, date_info
+
+    additions = {'person': ['address', 'phone', 'company', 'position'], 'marriage': [], 'event': []}
+    for table, fields in DATE_FIELDS.items():
+        additions[table] += [f + suffix for f in fields for suffix in ('_iso', '_precision')]
+    missing = {table: [c for c in columns if c not in _columns(con, table)] for table, columns in additions.items()}
+    if any(missing.values()):
+        directory = Path(backup_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        snapshot = directory / ('before_profile_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.db')
+        with sqlite3.connect(snapshot) as target:
+            con.backup(target)
+        logger.info('[migrate] 扩展字段前数据库快照：%s', snapshot.name)
+    con.execute('BEGIN IMMEDIATE')
+    try:
+        for table, columns in missing.items():
+            # 多 worker 可能在等锁期间已由另一进程补列；持锁后再次检查。
+            columns = [column for column in columns if column not in _columns(con, table)]
+            for column in columns:
+                con.execute(f'ALTER TABLE {table} ADD COLUMN {column} TEXT')
+            for field in DATE_FIELDS[table]:
+                if field + '_iso' in columns:
+                    for row in con.execute(f'SELECT id,{field} FROM {table}').fetchall():
+                        iso, precision = date_info(row[1], strict=False)
+                        con.execute(f'UPDATE {table} SET {field}_iso=?,{field}_precision=? WHERE id=?',
+                                    (iso, precision, row[0]))
+        # 触发器保护并发与导入路径。旧重复记录不删除、不自动改号，仍可读取并手工纠正。
+        for action in ('INSERT', 'UPDATE'):
+            event = action if action == 'INSERT' else 'UPDATE OF family_id,spouse1_id,marriage_order'
+            con.execute(f'''CREATE TRIGGER IF NOT EXISTS marriage_order_{action.lower()}
+                BEFORE {event} ON marriage
+                WHEN EXISTS (SELECT 1 FROM marriage m WHERE m.family_id=NEW.family_id
+                    AND m.spouse1_id=NEW.spouse1_id AND m.marriage_order=NEW.marriage_order
+                    AND m.id<>NEW.id)
+                BEGIN SELECT RAISE(ABORT, '成员 A 的本段次序已使用，请选择其他次序'); END''')
+        for table, fields in DATE_FIELDS.items():
+            for field in fields:
+                con.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_{field}_iso ON {table}(family_id,{field}_iso)')
+        con.execute('COMMIT')
+    except BaseException:
+        con.execute('ROLLBACK')
+        raise
+
+
+def ensure_child_order(con, backup_dir):
+    """排行按每位父/母名下的全部子女统一编号；旧记录保持空值，不根据生日编造。"""
+    import sqlite3
+    from datetime import datetime
+    from pathlib import Path
+    if 'child_order' not in _columns(con, 'parentchild'):
+        directory = Path(backup_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        snapshot = directory / ('before_child_order_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.db')
+        with sqlite3.connect(snapshot) as target:
+            con.backup(target)
+        logger.info('[migrate] 亲子排行补列前快照：%s', snapshot.name)
+    con.execute('BEGIN IMMEDIATE')
+    try:
+        if 'child_order' not in _columns(con, 'parentchild'):
+            con.execute('ALTER TABLE parentchild ADD COLUMN child_order INTEGER CHECK (child_order IS NULL OR child_order > 0)')
+        con.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_parentchild_order ON parentchild(family_id,parent_id,child_order) WHERE child_order IS NOT NULL')
+        con.execute('COMMIT')
+    except BaseException:
+        con.execute('ROLLBACK')
+        raise

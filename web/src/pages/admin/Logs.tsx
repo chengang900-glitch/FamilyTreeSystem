@@ -1,20 +1,26 @@
+import { appUrl } from '../../url'
 import { useEffect, useState } from 'react'
-import { Card, Table } from 'antd'
+import { Button, Card, Table } from 'antd'
+import { useStore } from '../../store'
 import { api } from '../../api'
 
 export default function Logs() {
+  const { user } = useStore()
   const [rows, setRows] = useState<any[]>([])
   useEffect(() => {
     api.get('/api/admin/logs?limit=200').then(setRows).catch(() => {})
   }, [])
   return (
-    <Card title="操作日志">
+    <Card
+      title="操作日志"
+      extra={<Button onClick={() => window.open(appUrl('/api/admin/logs/export?limit=10000'), '_blank')}>导出 CSV</Button>}
+    >
       <Table
         rowKey="id"
         dataSource={rows}
         size="small"
         scroll={{ x: 800 }}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: user?.page_size || 50 }}
         columns={[
           { title: '时间', dataIndex: 'created_at', width: 170 },
           { title: '用户', dataIndex: 'username', width: 120 },

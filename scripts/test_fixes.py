@@ -73,7 +73,7 @@ check('伪造 XFF 无法绕过登录限流', 429 in codes, str(codes))
 check('user-search 接口已下线', admin.get('/api/families/user-search?keyword=a').status_code == 404)
 
 # 3) 改密后旧令牌立即失效
-admin.post('/api/admin/users', json={'username': 'u_pwd', 'password': 'test1234'})
+admin.post('/api/admin/users', json={'username': 'u_pwd', 'password': 'test1234', 'must_change_pwd': False})
 u_pwd = scalar('SELECT id FROM users WHERE username=?', ('u_pwd',))['id']
 c_a = app.test_client()
 c_a.post('/api/auth/login', json={'username': 'u_pwd', 'password': 'test1234'})
@@ -101,8 +101,8 @@ check('改密后业务接口恢复', c_m.get('/api/families').status_code == 200
 
 # 5) 家谱管理员不能授予 admin
 fid = admin.post('/api/admin/families', json={'name': '安全测试谱'}).get_json()['data']['id']
-admin.post('/api/admin/users', json={'username': 'u_fadmin', 'password': 'test1234'})
-admin.post('/api/admin/users', json={'username': 'u_fmember', 'password': 'test1234'})
+admin.post('/api/admin/users', json={'username': 'u_fadmin', 'password': 'test1234', 'must_change_pwd': False})
+admin.post('/api/admin/users', json={'username': 'u_fmember', 'password': 'test1234', 'must_change_pwd': False})
 u_fadmin = scalar('SELECT id FROM users WHERE username=?', ('u_fadmin',))['id']
 u_fmember = scalar('SELECT id FROM users WHERE username=?', ('u_fmember',))['id']
 admin.post(f'/api/admin/families/{fid}/members', json={'user_id': u_fadmin, 'role': 'admin'})

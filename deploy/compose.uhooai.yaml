@@ -1,0 +1,41 @@
+name: familytree
+services:
+  familytree:
+    image: familytree:20261019
+    container_name: familytree
+    # One container owns this volume; discard stale PID locks before workers start.
+    command: ['sh', '-c', 'rm -f /app/data/backups/backup.lock; exec gunicorn --no-control-socket -w 2 -k gthread --threads 4 -b 0.0.0.0:8000 --timeout 120 server.app:app']
+    build:
+      context: ./source
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_BASE_PATH: /familytree/
+    environment:
+      TZ: Asia/Shanghai
+      FTS_HOST: 0.0.0.0
+      FTS_PORT: '8000'
+      FTS_CONFIG: /app/config.yaml
+      FTS_BASE_PATH: /familytree
+      FTS_LOG_DIR: /app/data/log
+      FTS_TRUSTED_PROXIES: 127.0.0.1,::1,172.19.0.16/32
+    volumes:
+      - data:/app/data
+    expose:
+      - '8000'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=5).read()']
+      interval: 30s
+      timeout: 6s
+      start_period: 30s
+      retries: 3
+    networks:
+      - portal
+volumes:
+  data:
+    name: familytree_data
+    external: true
+networks:
+  portal:
+    external: true
+    name: uhooai_portal

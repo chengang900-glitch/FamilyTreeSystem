@@ -7,22 +7,22 @@
 
 | 模块 | 说明 |
 |---|---|
-| 认证 | scrypt 口令散列、JWT 存 httpOnly Cookie、登录失败锁定、首登强制改密 |
+| 认证 | scrypt 口令散列、JWT 访问令牌 + 刷新令牌存 httpOnly Cookie、登录失败锁定、首登强制改密 |
 | 权限 | 三级角色（超管 / 家谱管理员 / 普通成员），接口按家谱作用域校验，写操作二次校验记录归属 |
-| 人员 | 世系代数、字辈自动生成与冻结、在世者隐私脱敏、CSV 批量导入导出 |
+| 人员 | 世系代数、字辈配置与冻结沿用、在世者隐私脱敏、CSV 导出 |
 | 关系 | 婚姻（多配偶）、亲子（支持收养 / 继嗣 / 寄养）、成环检测 |
 | 分支 | 房系支派管理，支持批量挂载成员 |
 | 事件 | 生卒、婚娶、迁徙、科举等事件与人物关联 |
 | 世系图 | 树形 / 层状 / 谱系图，支持缩放拖拽、直接高亮 |
 | 资源 | 图片 / PDF / 视频 / 文档上传，鉴权代理下载，无静态直链 |
-| 导入导出 | JSON / GEDCOM（导入按旧 ID→新 ID 重映射）、PDF / Word 付印 |
-| 备份 | 定时自动备份（SQLite 官方备份 API + 资源打包 ZIP），多进程下单实例调度 |
-| 审计 | 写操作全量入 `operation_log`，超管可查 |
+| 导入导出 | JSON / GEDCOM / ZUP（导入按旧 ID→新 ID 重映射）、PDF / Word 付印 |
+| 备份 | 定时自动备份（SQLite 官方备份 API + 资源打包 ZIP），超管全库备份、家谱级备份/恢复，多进程下单实例调度 |
+| 审计 | 写操作全量入 `operation_log`，支持结构化变更摘要、本谱/全站日志与 CSV 导出 |
 
 ## 技术栈
 
 - **后端**：Python 3.13、Flask 3、waitress（Windows）/ gunicorn（Linux）、SQLite（外键约束）
-- **前端**：Node 22、Vite、React 18、TypeScript、Ant Design 5
+- **前端**：Node 22、Vite、React 19、TypeScript、Ant Design 6
 - **部署**：Docker Compose（应用 + Nginx）或本机脚本
 
 ## 快速开始（Windows）
@@ -56,6 +56,16 @@ Linux 与 Docker 部署方式见 [DEPLOY.md](DEPLOY.md)。
 .venv\Scripts\python.exe scripts/test_m3.py      # 事件/资源/鉴权下载（18 项）
 .venv\Scripts\python.exe scripts/test_m4.py      # 世系树/导入导出/付印（22 项）
 .venv\Scripts\python.exe scripts/test_fixes.py  # 安全与数据正确性回归（52 项）
+.venv\Scripts\python.exe scripts/test_review2.py  # 复审专项：路径/脱敏/GEDCOM/多段婚姻（33 项）
+.venv\Scripts\python.exe scripts/test_product.py   # 产品补齐：刷新/日志/备份/ZUP（40 项）
+
+# 新增专项（test_reference 解析 PDF 页数，需额外安装 pypdf）
+.venv\Scripts\python.exe -m pip install pypdf
+.venv\Scripts\python.exe scripts/test_reference.py # 参考功能补齐（44 项）
+.venv\Scripts\python.exe scripts/test_profile.py   # 日期/联系字段/婚姻次序/再婚亲子（26 项）
+node scripts/test_layout.mjs                       # 五种布局节点覆盖（Node 22.18+）
+
+# 后端合计 282 项，全部使用独立临时库；布局另外执行五种模式检查
 
 # 端到端（需服务已启动）
 .venv\Scripts\python.exe scripts/smoke.py http://127.0.0.1:8100
@@ -69,15 +79,20 @@ Linux 与 Docker 部署方式见 [DEPLOY.md](DEPLOY.md)。
 ├─ deploy/     Dockerfile、docker-compose.yml、nginx.conf、启动脚本
 ├─ scripts/    自测与冒烟脚本
 ├─ data/       运行时数据（app.db、uploads、backups），不入库
-└─ docs/       产品方案、代码审查报告、修复说明
+└─ docs/       产品方案、代码审查报告、修复说明、复审修复说明
 ```
 
 ## 文档
+
+- [参考功能完善说明（日期、成员资料、婚姻次序与亲子录入）](docs/参考功能完善说明-2026-10-19.md)
 
 - [产品开发方案](docs/产品开发方案.md)
 - [部署与运维说明](DEPLOY.md)
 - [代码审查报告](docs/代码审查报告.md)
 - [修复说明](docs/修复说明.md)
+- [复审修复说明](docs/复审修复说明.md)
+- [产品功能缺口清单](docs/产品功能缺口清单.md)
+- [产品功能补齐说明](docs/产品功能补齐说明.md)
 
 ## 安全说明
 

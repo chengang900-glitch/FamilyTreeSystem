@@ -9,7 +9,8 @@ from server.db.conn import query
 from server.service import settings
 from server.service.permission import current_user
 
-MASK_FIELDS = ('birth_date', 'birth_place', 'bury_address', 'record', 'notes')
+MASK_FIELDS = ('birth_date', 'birth_date_iso', 'birth_date_precision', 'birth_place', 'bury_address',
+               'record', 'notes', 'address', 'phone', 'company', 'position')
 
 
 def can_see_private() -> bool:
@@ -23,22 +24,28 @@ def should_mask() -> bool:
     return settings.get_bool('privacy.mask_living', False) and not can_see_private()
 
 
+def _hide(item):
+    for key in MASK_FIELDS:
+        if key in item:
+            item[key] = None
+    item['masked'] = True
+
+
 def mask_person(row):
-    if not should_mask():
-        return dict(row)
     item = dict(row)
-    if not item.get('death_date'):
-        for key in MASK_FIELDS:
-            if key in item:
-                item[key] = None
-        item['masked'] = True
+    # 单条记录级隐私：非管理员始终看不到详情；全局在世者脱敏再叠加
+    if item.get('is_private') and not can_see_private():
+        _hide(item)
+    elif not item.get('death_date') and should_mask():
+        _hide(item)
     return item
 
 
 def visible_person_ids(family_id):
-    """脱敏开启时，返回当前用户不可见详情的在世成员 ID 集合（供世系树使用）"""
-    if not should_mask():
-        return set()
-    rows = query('SELECT id FROM person WHERE family_id=? AND (death_date IS NULL'
-                 " OR TRIM(death_date)='')", (family_id,))
+    """返回当前用户不可见生日的成员 ID（供世系树使用）。"""
+    conditions = ['is_private=1']
+    if should_mask():
+        conditions.append("(death_date IS NULL OR TRIM(death_date)='')")
+    rows = query(f"SELECT id FROM person WHERE family_id=? AND ({' OR '.join(conditions)})",
+                 (family_id,))
     return {r['id'] for r in rows}

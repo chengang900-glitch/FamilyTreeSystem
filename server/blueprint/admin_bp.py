@@ -1,15 +1,17 @@
 """超级管理员：用户管理、家谱管理、角色指派、日志、备份"""
+import io
 import re
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint, current_app, request, send_file
 
 from server.common import ApiError, now_str, ok
 from server.db.conn import execute, query, query_one, transaction
 from server.service import audit, auth, settings, valid
+from server.service.filepath import safe_upload_path
 from server.service.permission import current_user, require_super_admin
 
 bp = Blueprint('admin', __name__, url_prefix='/api/admin')
@@ -65,7 +67,7 @@ def create_user():
          data.get('phone'), data.get('email'),
          1 if data.get('status', 1) else 0,
          1 if data.get('is_superuser') else 0,
-         1 if data.get('must_change_pwd') else 0,
+         1 if data.get('must_change_pwd', 1) else 0,
          now_str(), now_str()))
     audit.log(me['id'], None, 'create_user', 'user', uid, username)
     return ok({'id': uid}, msg='用户已创建')
@@ -86,6 +88,8 @@ def update_user(uid):
             fields.append(f'{key}=?')
             args.append(data[key])
     if 'status' in data:
+        if uid == me['id'] and not data['status']:
+            raise ApiError('不能停用自己；请由另一位超级管理员操作')
         fields.append('status=?')
         args.append(1 if data['status'] else 0)
     if 'is_superuser' in data:
@@ -98,7 +102,8 @@ def update_user(uid):
         args.append(now_str())
         args.append(uid)
         execute(f'UPDATE users SET {",".join(fields)} WHERE id=?', args)
-    audit.log(me['id'], None, 'update_user', 'user', uid)
+    audit.log(me['id'], None, 'update_user', 'user', uid,
+              audit.change(row, data, ('real_name', 'phone', 'email', 'status', 'is_superuser')))
     return ok(msg='已保存')
 
 
@@ -159,9 +164,7 @@ def create_family():
     name = (data.get('name') or '').strip()
     if not name:
         raise ApiError('请输入家谱名称')
-    slug = (data.get('slug') or '').strip() or uuid.uuid4().hex[:10]
-    if query_one('SELECT id FROM family WHERE slug=?', (slug,)):
-        raise ApiError('标识已存在，请更换')
+    slug = uuid.uuid4().hex[:10]
     visibility = valid.to_int(data.get('visibility'), 'visibility', 0, minimum=0, maximum=1)
     with transaction():
         fid = execute(
@@ -183,7 +186,8 @@ def create_family():
 @require_super_admin
 def update_family(fid):
     me = current_user()
-    if query_one('SELECT id FROM family WHERE id=?', (fid,)) is None:
+    current = query_one('SELECT * FROM family WHERE id=?', (fid,))
+    if current is None:
         raise ApiError('家谱不存在', code=404)
     data = request.get_json(silent=True) or {}
     allowed = ('name', 'surname', 'hall_name', 'generation_chars', 'origin_place',
@@ -207,7 +211,8 @@ def update_family(fid):
         args.append(now_str())
         args.append(fid)
         execute(f'UPDATE family SET {",".join(fields)} WHERE id=?', args)
-    audit.log(me['id'], fid, 'update_family', 'family', fid)
+    audit.log(me['id'], fid, 'update_family', 'family', fid,
+              audit.change(current, data, tuple(allowed) + ('generation_frozen', 'visibility', 'status')))
     return ok(msg='已保存')
 
 
@@ -219,14 +224,18 @@ def delete_family(fid):
     if fam is None:
         raise ApiError('家谱不存在', code=404)
     with transaction():
-        for table in ('person', 'marriage', 'parentchild', 'event', 'eventperson',
-                      'branch', 'resource', 'resource_relation'):
+        # 顺序必须满足外键：先删从属/关系表，再删人物，最后删家谱
+        for table in ('eventperson', 'resource_relation', 'marriage', 'parentchild',
+                      'person', 'event', 'branch', 'resource'):
             execute(f'DELETE FROM {table} WHERE family_id=?', (fid,))
         execute('DELETE FROM family_members WHERE family_id=?', (fid,))
         execute('DELETE FROM family WHERE id=?', (fid,))
     # 数据库提交成功后再清理上传目录，避免回滚后文件已经没了
-    upload = Path(current_app.config['UPLOAD_DIR']) / fam['slug']
-    if upload.exists():
+    try:
+        upload = safe_upload_path(fam['slug'])
+    except ApiError:
+        upload = None
+    if upload is not None and upload.is_dir():
         shutil.rmtree(upload, ignore_errors=True)
     # operation_log 保留：审计留痕优先于「删谱即销账」
     audit.log(me['id'], fid, 'delete_family', 'family', fid)
@@ -309,6 +318,23 @@ def logs():
     return ok([dict(r) for r in query(sql, args)])
 
 
+@bp.get('/logs/export')
+@require_super_admin
+def logs_export():
+    limit = valid.to_int(request.args.get('limit'), 'limit', 10000, minimum=1, maximum=10000)
+    fid = valid.to_int(request.args.get('family_id'), 'family_id', minimum=1)
+    sql = ('SELECT l.*, u.username FROM operation_log l LEFT JOIN users u ON u.id=l.user_id')
+    args = []
+    if fid:
+        sql += ' WHERE l.family_id=?'
+        args.append(fid)
+    sql += ' ORDER BY l.id DESC LIMIT ?'
+    args.append(limit)
+    rows = query(sql, args)
+    return send_file(io.BytesIO(audit.export_csv(rows)), mimetype='text/csv',
+                     as_attachment=True, download_name='operation_logs.csv')
+
+
 @bp.post('/backup')
 @require_super_admin
 def backup_now():
@@ -334,6 +360,18 @@ def backup_list():
     return ok(files)
 
 
+@bp.get('/backups/<path:name>')
+@require_super_admin
+def backup_download(name):
+    """下载备份 ZIP；只允许数据目录内的 backup_*.zip 文件名。"""
+    if Path(name).name != name or not re.fullmatch(r'backup_[0-9_]+\.zip', name):
+        raise ApiError('备份文件名不合法', code=400)
+    path = Path(current_app.config['BACKUP_DIR']) / name
+    if not path.is_file():
+        raise ApiError('备份不存在', code=404)
+    return send_file(str(path), as_attachment=True, download_name=name)
+
+
 @bp.get('/stats')
 @require_super_admin
 def stats():
@@ -356,12 +394,12 @@ def get_settings():
 def put_settings():
     me = current_user()
     data = request.get_json(silent=True) or {}
-    valid = {r['key']: r['type'] for r in settings.all_settings()}
+    known = {r['key']: r['type'] for r in settings.all_settings()}
     items = {}
     for key, value in data.items():
-        if key not in valid:
+        if key not in known:
             continue
-        typ = valid[key]
+        typ = known[key]
         if typ == 'bool':
             items[key] = bool(value) if isinstance(value, bool) else str(value).lower() in ('1', 'true', 'yes', 'on')
         elif typ == 'int':

@@ -44,13 +44,31 @@ def is_trusted(ip: str, networks=None) -> bool:
     return any(addr in net for net in nets)
 
 
+def _valid_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def client_ip() -> str:
-    """返回可信的客户端 IP；非受信代理的 XFF 头一律忽略"""
+    """返回可信的客户端 IP；非受信代理的 XFF 头一律忽略。
+
+    注意：受信代理通常把客户端真实地址追加到 XFF 末尾，而客户端可以自己
+    伪造最左边的值。因此必须从右往左取第一个「非受信代理」地址，不能取首段。
+    """
     remote = request.remote_addr or ''
-    if is_trusted(remote):
-        forwarded = request.headers.get('X-Forwarded-For', '')
-        for part in forwarded.split(','):
-            candidate = part.strip()
-            if candidate:
-                return candidate
+    if not is_trusted(remote):
+        return remote or 'unknown'
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    chain = [part.strip() for part in forwarded.split(',') if part.strip()]
+    for candidate in reversed(chain):
+        if not _valid_ip(candidate):
+            continue
+        if not is_trusted(candidate):
+            return candidate
+    for candidate in reversed(chain):
+        if _valid_ip(candidate):
+            return candidate
     return remote or 'unknown'

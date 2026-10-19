@@ -149,7 +149,7 @@ check('导出 Word', isinstance(raw, bytes) and raw[:2] == b'PK')
 
 print('== 权限 ==')
 uname = f'smoke_{suffix}'
-call(adm, 'POST', '/api/admin/users', {'username': uname, 'password': 'test1234'})
+call(adm, 'POST', '/api/admin/users', {'username': uname, 'password': 'test1234', 'must_change_pwd': False})
 st, body, _ = call(adm, 'GET', f'/api/admin/users?keyword={uname}')
 uid = body['data'][0]['id']
 call(adm, 'POST', f'/api/admin/families/{fid}/members', {'user_id': uid, 'role': 'member'})

@@ -46,7 +46,7 @@ check('创建家谱', r.status_code == 200, f'fid={fid}')
 check('家谱列表可见', any(f['id'] == fid for f in c.get('/api/families').get_json()['data']))
 
 r = c.post('/api/admin/users', json={'username': 'u_member', 'password': 'test1234',
-                                     'real_name': '张三'})
+                                     'real_name': '张三', 'must_change_pwd': False})
 uid = r.get_json()['data']['id']
 check('创建普通用户', r.status_code == 200, f'uid={uid}')
 check('弱密码被拒', c.post('/api/admin/users', json={'username': 'u2', 'password': 'abc'}).status_code == 400)

@@ -1,5 +1,5 @@
 """认证：登录、登出、当前用户、修改密码"""
-from flask import Blueprint, make_response, request
+from flask import Blueprint, current_app, make_response, request
 
 from server.common import ApiError, now_str, ok
 from server.db.conn import execute, query, query_one
@@ -51,8 +51,26 @@ def login():
             (now_str(), now_str(), row['id']))
     audit.log(row['id'], None, 'login')
     token = auth.issue_token(row, remember)
+    refresh = auth.issue_refresh_token(row, remember)
     resp = make_response(ok(_profile(row)))
-    auth.set_auth_cookie(resp, token, remember)
+    auth.set_auth_cookies(resp, token, refresh, remember)
+    return resp
+
+
+@bp.post('/refresh')
+def refresh():
+    """用 httpOnly 刷新 Cookie 换发新的访问令牌（不要求访问 Cookie 仍有效）。"""
+    token = request.cookies.get(auth.REFRESH_COOKIE)
+    if not token:
+        raise ApiError('登录已过期，请重新登录', code=401)
+    payload = auth.decode_token(token, kind='refresh')
+    user = auth.user_from_refresh_token(token)
+    if not user or not payload:
+        raise ApiError('登录已过期，请重新登录', code=401)
+    remember = (payload.get('exp', 0) - payload.get('iat', 0)) > 86400
+    resp = make_response(ok({'id': user['id']}))
+    auth.set_auth_cookies(resp, auth.issue_token(user, remember),
+                          auth.issue_refresh_token(user, remember), remember)
     return resp
 
 
@@ -63,7 +81,7 @@ def logout():
     auth.bump_token_version(user['id'])
     audit.log(user['id'], None, 'logout')
     resp = make_response(ok())
-    resp.delete_cookie(auth.ACCESS_COOKIE, path='/')
+    auth.clear_auth_cookies(resp)
     return resp
 
 
@@ -73,7 +91,13 @@ def me():
     user = current_user()
     data = _profile(user)
     data['site_name'] = settings.get_str('site.name', '家谱管理系统')
-    data['page_size'] = settings.get_int('site.page_size', 50)
+    data['page_size'] = min(max(settings.get_int('site.page_size', 50), 1), 500)
+    data['password_min_length'] = max(settings.get_int('security.password_min_length', 8), 1)
+    data['password_require_strong'] = settings.get_bool('security.password_require_strong', True)
+    data['default_strategy'] = settings.get_str('storage.default_strategy', 'append')
+    data['upload_max_mb'] = min(
+        settings.get_int('storage.upload_max_mb', 200),
+        int(current_app.config['MAX_CONTENT_LENGTH'] / (1024 * 1024)))
     return ok(data)
 
 
@@ -96,7 +120,8 @@ def change_password():
     audit.log(user['id'], None, 'change_password')
     row = query_one('SELECT * FROM users WHERE id=?', (user['id'],))
     resp = make_response(ok(msg='密码已更新'))
-    auth.set_auth_cookie(resp, auth.issue_token(row), remember=False)
+    auth.set_auth_cookies(resp, auth.issue_token(row),
+                          auth.issue_refresh_token(row), remember=False)
     return resp
 
 

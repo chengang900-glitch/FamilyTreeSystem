@@ -79,8 +79,9 @@ def do_backup(with_resources=True):
     try:
         path = backup_all(app.config['DB_PATH'], bdir, Path(app.config['UPLOAD_DIR']),
                           with_resources)
-        from server.service import settings
+        from server.service import audit, settings
         clean_old(bdir, settings.get_int('storage.backup_keep_count', 5))
+        audit.cleanup(settings.get_int('storage.operation_log_retention_days', 0))
         _last_success = now_str()
         _last_error = None
         return path
@@ -147,13 +148,13 @@ def _worker(app):
     while not _stop.wait(5):
         try:
             from server.service import settings
-            if not settings.get_bool('storage.backup_enabled', True):
-                continue
-            interval = max(settings.get_int('storage.backup_interval_minutes', 60), 1)
-            if time.time() - _worker.last < interval * 60:
-                continue
-            _worker.last = time.time()
             with app.app_context():
+                if not settings.get_bool('storage.backup_enabled', True):
+                    continue
+                interval = max(settings.get_int('storage.backup_interval_minutes', 60), 1)
+                if time.time() - _worker.last < interval * 60:
+                    continue
+                _worker.last = time.time()
                 path = do_backup()
                 logger.info('[backup] 自动备份完成：%s', path.name)
         except Exception:

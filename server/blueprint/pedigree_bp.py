@@ -14,8 +14,9 @@ bp = Blueprint('pedigree', __name__, url_prefix='/api/families')
 def pedigree(family_id):
     persons = query('SELECT id, generation, name, courtesy_name, type, birth_date, death_date,'
                     ' branch_id FROM person WHERE family_id=? ORDER BY generation, id', (family_id,))
-    pc = query('SELECT parent_id, child_id, type FROM parentchild WHERE family_id=?', (family_id,))
-    marriages = query('SELECT spouse1_id, spouse2_id FROM marriage WHERE family_id=?', (family_id,))
+    pc = query('SELECT id, parent_id, child_id, type, child_order FROM parentchild WHERE family_id=? ORDER BY id', (family_id,))
+    marriages = query('SELECT id, spouse1_id, spouse2_id, marriage_order FROM marriage'
+                      ' WHERE family_id=? ORDER BY spouse1_id, marriage_order, id', (family_id,))
 
     parents = {}
     children = {}
@@ -60,4 +61,6 @@ def pedigree(family_id):
         'nodes': nodes,
         'root': root,
         'total': len(nodes),
+        'marriages': [dict(m) for m in marriages],
+        'parentchild': [dict(r) for r in pc],
     }})

@@ -107,4 +107,24 @@ def init_db(schema_path):
 
     from server.db.migrate import ensure_constraints
     ensure_constraints(con, schema_path)
+    from server.db.migrate import ensure_profile_fields, ensure_child_order
+    from pathlib import Path
+    ensure_profile_fields(con, current_app.config.get('BACKUP_DIR', Path(current_app.config['DB_PATH']).parent / 'backups'))
+    ensure_child_order(con, current_app.config.get('BACKUP_DIR', Path(current_app.config['DB_PATH']).parent / 'backups'))
+    # 历史库可能残留绝对路径/../ 形式的 storage_path，启动时清空（不删文件）
+    from server.service.filepath import sanitize_resource_paths
+    sanitize_resource_paths(con)
+    # 多态关联没有外键，顺手清理历史删除留下的悬空关系
+    try:
+        con.execute(
+            "DELETE FROM resource_relation WHERE"
+            " (entity_type='person' AND entity_id NOT IN (SELECT id FROM person))"
+            " OR (entity_type='branch' AND entity_id NOT IN (SELECT id FROM branch))"
+            " OR (entity_type='event' AND entity_id NOT IN (SELECT id FROM event))"
+            " OR (entity_type='marriage' AND entity_id NOT IN (SELECT id FROM marriage))"
+            " OR (entity_type='parentchild' AND entity_id NOT IN (SELECT id FROM parentchild))"
+        )
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
     return con

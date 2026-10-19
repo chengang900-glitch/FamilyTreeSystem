@@ -80,7 +80,7 @@ print('== 鉴权下载 ==')
 r = admin.get(f'/api/families/{fid}/files/{rid}')
 check('授权用户可下载', r.status_code == 200 and b'PDF-BYTES-TEST' in r.data)
 
-admin.post('/api/admin/users', json={'username': 'm3_viewer', 'password': 'test1234'})
+admin.post('/api/admin/users', json={'username': 'm3_viewer', 'password': 'test1234', 'must_change_pwd': False})
 uid = admin.get('/api/admin/users?keyword=m3_viewer').get_json()['data'][0]['id']
 admin.post(f'/api/admin/families/{fid}/members', json={'user_id': uid, 'role': 'member'})
 viewer = app.test_client()
@@ -88,7 +88,7 @@ viewer.post('/api/auth/login', json={'username': 'm3_viewer', 'password': 'test1
 check('本谱普通用户可下载', viewer.get(f'/api/families/{fid}/files/{rid}').status_code == 200)
 
 outsider = app.test_client()
-admin.post('/api/admin/users', json={'username': 'm3_out', 'password': 'test1234'})
+admin.post('/api/admin/users', json={'username': 'm3_out', 'password': 'test1234', 'must_change_pwd': False})
 uid2 = admin.get('/api/admin/users?keyword=m3_out').get_json()['data'][0]['id']
 outsider.post('/api/auth/login', json={'username': 'm3_out', 'password': 'test1234'})
 check('非本谱用户下载被拒', outsider.get(f'/api/families/{fid}/files/{rid}').status_code == 403)

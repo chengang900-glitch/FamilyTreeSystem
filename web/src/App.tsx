@@ -20,6 +20,8 @@ import Pedigree from './pages/Pedigree'
 import DataExchange from './pages/DataExchange'
 import PrintBook from './pages/PrintBook'
 import FamilyMembers from './pages/FamilyMembers'
+import FamilyLogs from './pages/FamilyLogs'
+import Backup from './pages/Backup'
 
 function Guard({ children, admin }: { children: ReactElement; admin?: boolean }) {
   const { user, loaded } = useStore()
@@ -58,6 +60,8 @@ export default function App() {
         <Route path="/exchange" element={<DataExchange />} />
         <Route path="/print" element={<PrintBook />} />
         <Route path="/members" element={<FamilyMembers />} />
+        <Route path="/family-logs" element={<FamilyLogs />} />
+        <Route path="/backup" element={<Backup />} />
       </Route>
       <Route
         element={

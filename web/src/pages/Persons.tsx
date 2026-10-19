@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, message,
+  Button, Card, Checkbox, Dropdown, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Segmented, Select, Space, Table, Tag, message,
 } from 'antd'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { useStore } from '../store'
 import { PERSON_TYPES } from '../constants'
+import DateInput from '../components/DateInput'
 
 interface Row {
   id: number
@@ -22,6 +23,10 @@ interface Row {
   notes: string
   branch_id: number | null
   branch_name: string
+  address: string
+  phone: string
+  company: string
+  position: string
 }
 
 export default function Persons() {
@@ -31,7 +36,12 @@ export default function Persons() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [size] = useState(20)
+  const [view, setView] = useState<'table' | 'card'>(
+    () => (localStorage.getItem('fts_person_view') === 'card' ? 'card' : 'table'))
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('fts_person_cols') || '[]') } catch { return [] }
+  })
+  const size = Math.min(Math.max(user?.page_size || 20, 1), 500)
   const [kw, setKw] = useState('')
   const [gen, setGen] = useState<number | undefined>()
   const [type, setType] = useState<number | undefined>()
@@ -71,6 +81,11 @@ export default function Persons() {
   }, [familyId, query])
 
   useEffect(() => {
+    // 筛选条件变化后回到第一页，避免停在超出结果集的页码
+    setPage(1)
+  }, [kw, gen, type, branch])
+
+  useEffect(() => {
     if (familyId) api.get(`/api/families/${familyId}/branches`).then(setBranches).catch(() => {})
   }, [familyId])
 
@@ -91,11 +106,12 @@ export default function Persons() {
   }
 
   const columns = [
-    { title: '世代', dataIndex: 'generation', width: 70 },
-    { title: '姓名', dataIndex: 'name', width: 100 },
-    { title: '字', dataIndex: 'courtesy_name', width: 80 },
-    { title: '号', dataIndex: 'art_name', width: 80 },
+    { key: 'generation', title: '世代', dataIndex: 'generation', width: 70 },
+    { key: 'name', title: '姓名', dataIndex: 'name', width: 100 },
+    { key: 'courtesy_name', title: '字', dataIndex: 'courtesy_name', width: 80 },
+    { key: 'art_name', title: '号', dataIndex: 'art_name', width: 80 },
     {
+      key: 'type',
       title: '类型',
       dataIndex: 'type',
       width: 80,
@@ -104,12 +120,19 @@ export default function Persons() {
       ),
     },
     {
+      key: 'life',
       title: '生卒',
       width: 190,
       render: (_: any, r: Row) => `${r.birth_date || '?'} ~ ${r.death_date || '在世'}`,
     },
-    { title: '所属分支', render: (_: any, r: Row) => r.branch_name || '-' },
+    { key: 'branch', title: '所属分支', width: 120, ellipsis: true, render: (_: any, r: Row) => r.branch_name || '-' },
+    { key: 'address', title: '住址', dataIndex: 'address', width: 150 },
+    { key: 'phone', title: '手机号', dataIndex: 'phone', width: 150 },
+    { key: 'company', title: '单位/公司', dataIndex: 'company', width: 150 },
+    { key: 'position', title: '职位', dataIndex: 'position', width: 150 },
+
     {
+      key: 'actions',
       title: '操作',
       width: 130,
       fixed: 'right' as const,
@@ -155,6 +178,7 @@ export default function Persons() {
         ),
     },
   ]
+  const visibleColumns = columns.filter((c) => !hiddenCols.includes(c.key))
 
   return (
     <Card
@@ -209,9 +233,40 @@ export default function Persons() {
           onChange={setBranch}
           options={branches.map((b) => ({ value: b.id, label: b.name }))}
         />
+        {!mobile && (
+          <Segmented
+            size="small"
+            value={view}
+            onChange={(v) => {
+              const next = v as 'table' | 'card'
+              setView(next)
+              localStorage.setItem('fts_person_view', next)
+            }}
+            options={[{ value: 'table', label: '列表' }, { value: 'card', label: '卡片' }]}
+          />
+        )}
+        {!mobile && view === 'table' && (
+          <Dropdown
+            menu={{
+              selectable: true,
+              multiple: true,
+              selectedKeys: columns.filter((c) => !hiddenCols.includes(c.key)).map((c) => c.key),
+              items: columns.map((c) => ({ key: c.key, label: c.title })),
+              onClick: ({ key }) => {
+                const next = hiddenCols.includes(key)
+                  ? hiddenCols.filter((k) => k !== key)
+                  : [...hiddenCols, key]
+                setHiddenCols(next)
+                localStorage.setItem('fts_person_cols', JSON.stringify(next))
+              },
+            }}
+          >
+            <Button size="small">列设置</Button>
+          </Dropdown>
+        )}
       </Space>
 
-      {mobile ? (
+      {mobile || view === 'card' ? (
         <Space direction="vertical" style={{ width: '100%' }} size={8}>
           {rows.map((r) => (
             <Card key={r.id} size="small" styles={{ body: { padding: 12 } }}>
@@ -225,6 +280,9 @@ export default function Persons() {
                   {r.birth_date || '?'} ~ {r.death_date || '在世'}
                 </span>
                 <span style={{ fontSize: 12, color: '#888' }}>{r.branch_name || '未归分支'}</span>
+                {r.address && <span style={{ fontSize: 12 }}>住址：{r.address}</span>}
+                {r.phone && <span style={{ fontSize: 12 }}>手机号：{r.phone}</span>}
+                {(r.company || r.position) && <span style={{ fontSize: 12 }}>{[r.company, r.position].filter(Boolean).join(' · ')}</span>}
                 {writeable && (
                   <Space size={4}>
                     <Button
@@ -252,13 +310,23 @@ export default function Persons() {
             </Card>
           ))}
           {rows.length === 0 && <div style={{ color: '#999', padding: 20 }}>暂无成员</div>}
+          {total > size && (
+            <Pagination
+              simple
+              current={page}
+              pageSize={size}
+              total={total}
+              onChange={setPage}
+              style={{ textAlign: 'center', marginTop: 8 }}
+            />
+          )}
         </Space>
       ) : (
         <Table
           rowKey="id"
           dataSource={rows}
-          columns={columns}
-          scroll={{ x: 1000 }}
+          columns={visibleColumns}
+          scroll={{ x: 1800 }}
           pagination={{
             current: page,
             pageSize: size,
@@ -287,10 +355,10 @@ export default function Persons() {
               <Input />
             </Form.Item>
             <Form.Item name="courtesy_name" label="字">
-              <Input />
+              <Input style={{ width: 96 }} />
             </Form.Item>
             <Form.Item name="art_name" label="号">
-              <Input />
+              <Input style={{ width: 96 }} />
             </Form.Item>
             <Form.Item name="type" label="成员类型">
               <Select
@@ -308,10 +376,10 @@ export default function Persons() {
           </Space>
           <Space size={12} wrap>
             <Form.Item name="birth_date" label="出生日期（公历/农历）">
-              <Input placeholder="如：1956-08-08 或 乙卯年正月廿七" style={{ width: 220 }} />
+              <DateInput />
             </Form.Item>
             <Form.Item name="death_date" label="逝世日期">
-              <Input style={{ width: 220 }} />
+              <DateInput />
             </Form.Item>
           </Space>
           <Form.Item name="birth_place" label="出生地">
@@ -320,11 +388,20 @@ export default function Persons() {
           <Form.Item name="bury_address" label="安葬地点">
             <Input />
           </Form.Item>
+          <Form.Item name="address" label="住址"><Input maxLength={1000} /></Form.Item>
+          <Space wrap>
+            <Form.Item name="phone" label="手机号"><Input type="tel" maxLength={50} /></Form.Item>
+            <Form.Item name="company" label="单位/公司"><Input maxLength={200} /></Form.Item>
+            <Form.Item name="position" label="职位"><Input maxLength={100} /></Form.Item>
+          </Space>
           <Form.Item name="record" label="生平记事">
             <Input.TextArea rows={3} />
           </Form.Item>
           <Form.Item name="notes" label="备注">
             <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="is_private" valuePropName="checked">
+            <Checkbox>仅家谱管理员/超管可见详情</Checkbox>
           </Form.Item>
         </Form>
       </Modal>

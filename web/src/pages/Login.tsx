@@ -1,19 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Checkbox, Form, Input, Typography, message } from 'antd'
+import { Button, Card, Checkbox, Form, Input, Typography, message, theme } from 'antd'
 import { BookOutlined, LockOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useStore } from '../store'
 
 export default function Login() {
+  const { token } = theme.useToken()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [siteName, setSiteName] = useState('家谱管理系统')
   const nav = useNavigate()
   const { load, user } = useStore()
 
   useEffect(() => {
     if (user) nav('/', { replace: true })
   }, [user, nav])
+
+  useEffect(() => {
+    api.get('/api/site').then((d) => {
+      if (d?.site_name) {
+        setSiteName(d.site_name)
+        document.title = d.site_name
+      }
+    }).catch(() => {})
+  }, [])
 
   const submit = async (values: any) => {
     setLoading(true)
@@ -41,14 +52,14 @@ export default function Login() {
     <div
       style={{
         minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#f7f5f2', padding: 16,
+        background: token.colorBgLayout, padding: 16,
       }}
     >
       <Card style={{ width: 380, maxWidth: '100%' }} styles={{ body: { padding: 28 } }}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
           <BookOutlined style={{ fontSize: 34, color: '#8c6b4f' }} />
           <Typography.Title level={4} style={{ marginTop: 8, marginBottom: 0 }}>
-            家谱管理系统
+            {siteName}
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             把一族的来处，稳稳存下来

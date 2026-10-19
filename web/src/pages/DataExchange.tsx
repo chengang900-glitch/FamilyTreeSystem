@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Button, Card, Form, Input, Select, Space, Steps, Tag, Upload, message } from 'antd'
+import { appUrl } from '../url'
+import { useEffect, useState } from 'react'
+import { Alert, Button, Card, Form, Input, Modal, Progress, Select, Space, Steps, Tag, Upload, message } from 'antd'
 import { DownloadOutlined, UploadOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -23,13 +24,20 @@ export default function DataExchange() {
   const [format, setFormat] = useState('json')
   const [modules, setModules] = useState<string[]>(MODULES.map((m) => m.key))
   const [includeRes, setIncludeRes] = useState(false)
-  const [strategy, setStrategy] = useState('append')
+  const [strategy, setStrategy] = useState(user?.default_strategy || 'append')
   const [file, setFile] = useState<any>(null)
   const [result, setResult] = useState<any>(null)
+  const [progress, setProgress] = useState<number | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [includeMetadata, setIncludeMetadata] = useState(false)
+
+  useEffect(() => {
+    if (user?.default_strategy) setStrategy(user.default_strategy)
+  }, [user?.default_strategy])
 
   const doExport = () => {
     const qs = `format=${format}&include_resources=${includeRes}&modules=${modules.join(',')}`
-    window.open(`/api/families/${familyId}/export?${qs}`, '_blank')
+    window.open(appUrl(`/api/families/${familyId}/export?${qs}`), '_blank')
   }
 
   const doImport = async () => {
@@ -40,18 +48,39 @@ export default function DataExchange() {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('strategy', strategy)
+    fd.append('include_metadata', String(includeMetadata))
+    setUploading(true)
+    setProgress(0)
     try {
-      const res = await fetch(`/api/families/${familyId}/import`, {
-        method: 'POST', body: fd, credentials: 'same-origin',
-        headers: { 'X-Requested-With': 'fetch' },
+      const data = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', appUrl(`/api/families/${familyId}/import`))
+        xhr.withCredentials = true
+        xhr.setRequestHeader('X-Requested-With', 'fetch')
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          try {
+            const j = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300 && j.code === 0) resolve(j.data)
+            else reject(new Error(j.msg || '导入失败'))
+          } catch {
+            reject(new Error('服务响应异常'))
+          }
+        }
+        xhr.onerror = () => reject(new Error('导入失败'))
+        xhr.send(fd)
       })
-      const j = await res.json()
-      if (j.code !== 0) throw new Error(j.msg)
-      setResult(j.data)
+      setResult(data)
       message.success('导入完成')
       setFile(null)
+      if (includeMetadata) await useStore.getState().load()
     } catch (e: any) {
       message.error(e.message)
+    } finally {
+      setUploading(false)
+      setProgress(null)
     }
   }
 
@@ -69,6 +98,7 @@ export default function DataExchange() {
                 { value: 'json', label: 'JSON（完整备份）' },
                 { value: 'csv', label: 'CSV 压缩包（Excel 可查看）' },
                 { value: 'gedcom', label: 'GEDCOM（.ged，可互通）' },
+                { value: 'zup', label: 'ZUP（家谱交换包）' },
               ]}
             />
             <label>
@@ -79,6 +109,7 @@ export default function DataExchange() {
               /> 打包资源库文件
             </label>
           </Space>
+          {format === 'gedcom' && <Alert type="info" showIcon message="GEDCOM 交换人物、婚姻和亲子关系，其他软件可能忽略本系统扩展字段。完整迁移请使用 JSON 或 ZUP，并勾选资源原件。" />}
           <div>
             <div style={{ marginBottom: 6 }}>导出内容</div>
             <Space wrap>
@@ -121,12 +152,20 @@ export default function DataExchange() {
                 }}
                 maxCount={1}
                 onRemove={() => setFile(null)}
-                accept=".json,.ged,.zip"
+                accept=".json,.ged,.zip,.zup"
               >
-                <Button icon={<UploadOutlined />}>选择 JSON / GEDCOM / ZIP</Button>
+                <Button icon={<UploadOutlined />}>选择 JSON / GEDCOM / ZIP / ZUP</Button>
               </Upload>
-              <Button type="primary" onClick={doImport}>开始导入</Button>
+              <Button type="primary" onClick={() => {
+                if (strategy === 'overwrite') Modal.confirm({ title: '覆盖导入将清空本谱现有业务数据和资源，确认继续？',
+                  content: '建议先在“备份与恢复”中下载备份。', onOk: doImport })
+                else doImport()
+              }} loading={uploading}>开始导入</Button>
             </Space>
+            <label><input type="checkbox" checked={includeMetadata} onChange={e => setIncludeMetadata(e.target.checked)} />
+              同时导入项目资料（替换谱名、堂号、字辈、修辑者等；仅 JSON/ZIP/ZUP）
+            </label>
+            {progress !== null && <Progress percent={progress} size="small" />}
             {result && (
               <Space wrap>
                 <Tag color="green">成员 {result.person}</Tag>

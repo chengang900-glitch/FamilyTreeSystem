@@ -21,41 +21,70 @@ export interface UserInfo {
   families: FamilyItem[]
   site_name?: string
   page_size?: number
+  password_min_length?: number
+  password_require_strong?: boolean
+  default_strategy?: string
+  upload_max_mb?: number
 }
 
 interface State {
   user: UserInfo | null
   familyId: number | null
   loaded: boolean
+  dark: boolean
+  recentFamilyIds: number[]
   load: () => Promise<void>
   setFamily: (id: number) => void
+  toggleDark: () => void
   clear: () => void
 }
 
-export const useStore = create<State>((set) => ({
+function recentIds(userId: number, allowed: FamilyItem[], current?: number): number[] {
+  let stored: number[] = []
+  try {
+    const value = JSON.parse(localStorage.getItem(`fts_recent_${userId}`) || '[]')
+    if (Array.isArray(value)) stored = value.filter(v => Number.isInteger(v))
+  } catch { /* 无效历史只影响便利入口 */ }
+  const ids = [...new Set([...(current ? [current] : []), ...stored])]
+    .filter(id => allowed.some(f => f.id === id)).slice(0, 8)
+  localStorage.setItem(`fts_recent_${userId}`, JSON.stringify(ids))
+  return ids
+}
+
+export const useStore = create<State>((set, get) => ({
   user: null,
   familyId: Number(localStorage.getItem('fts_family') || 0) || null,
   loaded: false,
+  dark: localStorage.getItem('fts_theme') === 'dark',
+  recentFamilyIds: [],
   load: async () => {
     try {
       const user = await api.get<UserInfo>('/api/auth/me')
-      let fid = Number(localStorage.getItem('fts_family') || 0)
+      let fid = Number(localStorage.getItem(`fts_family_${user.id}`) || localStorage.getItem('fts_family') || 0)
       if (!user.families.some((f) => f.id === fid)) {
         fid = user.families[0]?.id || 0
         localStorage.setItem('fts_family', String(fid))
       }
-      set({ user, familyId: fid || null, loaded: true })
+      set({ user, familyId: fid || null, recentFamilyIds: recentIds(user.id, user.families, fid), loaded: true })
     } catch {
-      set({ user: null, loaded: true })
+      set({ user: null, familyId: null, recentFamilyIds: [], loaded: true })
     }
   },
   setFamily: (id) => {
+    const user = get().user
+    if (!user?.families.some(f => f.id === id)) return
     localStorage.setItem('fts_family', String(id))
-    set({ familyId: id })
+    localStorage.setItem(`fts_family_${user.id}`, String(id))
+    set({ familyId: id, recentFamilyIds: recentIds(user.id, user.families, id) })
   },
+  toggleDark: () => set((state) => {
+    const dark = !state.dark
+    localStorage.setItem('fts_theme', dark ? 'dark' : 'light')
+    return { dark }
+  }),
   clear: () => {
     localStorage.removeItem('fts_family')
-    set({ user: null, familyId: null })
+    set({ user: null, familyId: null, recentFamilyIds: [] })
   },
 }))
 

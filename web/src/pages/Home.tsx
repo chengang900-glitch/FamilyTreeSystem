@@ -4,15 +4,25 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store'
 
 export default function Home() {
-  const { user, familyId, setFamily } = useStore()
+  const { user, familyId, setFamily, recentFamilyIds } = useStore()
   const nav = useNavigate()
   const fam = user?.families.find((f) => f.id === familyId)
 
   if (!user) return null
+  const recent = <Card size="small" title="最近访问的家谱" style={{ marginBottom: 16 }}>
+    <Space wrap>
+      {recentFamilyIds.map(id => user.families.find(f => f.id === id)).filter(Boolean).map(f => (
+        <Button key={f!.id} type={familyId === f!.id ? 'primary' : 'default'}
+          icon={<BookOutlined />} onClick={() => setFamily(f!.id)}>{f!.name}</Button>
+      ))}
+      {!recentFamilyIds.length && <Typography.Text type="secondary">选择家谱后显示访问记录</Typography.Text>}
+    </Space>
+  </Card>
 
   if (!fam) {
     return (
       <div>
+        {recent}
         <Typography.Title level={4}>选择家谱</Typography.Title>
         {user.families.length === 0 ? (
           <Empty description="你还没有加入任何家谱，请联系管理员">
@@ -54,13 +64,14 @@ export default function Home() {
     { key: '/branches', title: '分支房系', desc: '堂号、字辈、家族训' },
     { key: '/events', title: '家族事件', desc: '时间、地点、参与人' },
     { key: '/resources', title: '文献资源', desc: '老谱、契约、影像' },
-    { key: '/pedigree', title: '世系树', desc: '五种布局，一键成图' },
+    { key: '/pedigree', title: '世系树', desc: '三种布局，一键成图' },
     { key: '/exchange', title: '导入导出', desc: 'JSON / CSV / GEDCOM' },
     { key: '/print', title: '族谱付印', desc: 'PDF / Word 成册' },
   ]
 
   return (
     <div>
+      {recent}
       <Card styles={{ body: { padding: 20 } }} style={{ marginBottom: 16 }}>
         <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
           <div>
@@ -69,7 +80,6 @@ export default function Home() {
               <Tag color={fam.role === 'admin' ? 'orange' : 'green'}>
                 {fam.role === 'admin' ? '家谱管理员' : '家族成员'}
               </Tag>
-              {fam.visibility === 2 && <Tag color="blue">公开只读</Tag>}
             </Space>
           </div>
           <Button icon={<PlusOutlined />} onClick={() => nav('/persons')}>录入成员</Button>

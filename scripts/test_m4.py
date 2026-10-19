@@ -109,7 +109,7 @@ r = admin.post(f'/api/families/{fid}/print/pdf',
 check('个人模式 PDF', r.status_code == 200 and r.data[:4] == b'%PDF')
 
 print('== 权限 ==')
-admin.post('/api/admin/users', json={'username': 'm6_view', 'password': 'test1234'})
+admin.post('/api/admin/users', json={'username': 'm6_view', 'password': 'test1234', 'must_change_pwd': False})
 uid = admin.get('/api/admin/users?keyword=m6_view').get_json()['data'][0]['id']
 admin.post(f'/api/admin/families/{fid}/members', json={'user_id': uid, 'role': 'member'})
 v = app.test_client()

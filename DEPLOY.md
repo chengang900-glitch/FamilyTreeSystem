@@ -102,7 +102,7 @@ docker compose -f deploy/docker-compose.yml logs -f app
 |---|---|
 | 首次口令 | 随机生成、仅打印一次、后端强制首登改密 |
 | 传输 | Nginx 终止 TLS，强制 HTTPS |
-| 会话 | JWT 存 httpOnly + Secure + SameSite=Strict Cookie；改密/重置/登出即失效旧令牌 |
+| 会话 | 访问 JWT 8h + 刷新 JWT 7d，均存 httpOnly + Secure + SameSite=Strict Cookie；改密/重置/登出即失效旧令牌 |
 | CSRF | SameSite=Strict + 写接口校验 Origin 白名单 |
 | 暴破 | 登录失败 5 次锁定 10 分钟；登录接口限流 20 次/分钟（IP 取受信代理后的真实来源） |
 | 上传 | 类型白名单 + 大小上限 + 随机文件名 + 非 Web 根目录 |
@@ -118,15 +118,18 @@ docker compose -f deploy/docker-compose.yml logs -f app
 - 配置：`server/config.yaml`（端口、路径）。支持环境变量 `FTS_HOST` / `FTS_PORT` /
   `FTS_CONFIG` / `FTS_TRUSTED_PROXIES` / `FTS_ADMIN_PASSWORD`（仅首次启动生效）。
 - 日志：`log/server.log`（5MB 轮转，保留 3 份），同时输出到控制台。
-- 备份：`data/backups/backup_*.zip`（含数据库 + 资源目录）。恢复：解压后用 `app.db`
-  覆盖 `data/app.db`，资源放回 `data/uploads/`。备份失败会写 error 日志，不再静默。
+- 备份：`data/backups/backup_*.zip`（含数据库 + 资源目录）。恢复推荐停服后执行：
+  `python scripts/restore_backup.py data/backups/backup_xxx.zip --yes`
+  （脚本会做完整性检查、保留旧库、清理 WAL）。也可手工解压后把 `data/db_*.db`
+  重命名为 `app.db` 覆盖 `data/app.db`，资源放回 `data/uploads/`。
+  家谱管理员可在页面“备份与恢复”做本谱级备份/恢复；备份失败会写 error 日志。
 - **结构迁移**：升级到本版本后首次启动，会自动把旧库补齐外键（`person.branch_id`、
   `marriage.spouse*`、`parentchild.*`、`eventperson.*`、`resource_relation.*` 等），
   并清理迁移前已存在的悬空引用（孤儿 `eventperson`、指向不存在人物的婚姻等）。
   全程在一个事务内完成，失败自动回滚并写 error 日志。
   建议升级前先备份 `data/app.db`（直接复制文件即可，或先跑一次手动备份）。
-- 数据导入：支持 JSON / GEDCOM / ZIP，导入时按「旧 ID → 新 ID」重映射，
-  ZIP 内 `resources/` 原件会解出并写回上传目录。
+- 数据导入：支持 JSON / GEDCOM / ZIP / ZUP，导入时按「旧 ID → 新 ID」重映射，
+  ZIP/ZUP 内 `resources/` 原件会解出并写回上传目录。
 
 ## 七、自测
 
@@ -136,7 +139,11 @@ docker compose -f deploy/docker-compose.yml logs -f app
 .venv/Scripts/python.exe scripts/test_m2.py     # 成员/婚姻/亲子/分支（23 项）
 .venv/Scripts/python.exe scripts/test_m3.py     # 事件/资源/鉴权下载（18 项）
 .venv/Scripts/python.exe scripts/test_m4.py     # 世系树/导入导出/付印（22 项）
-.venv/Scripts/python.exe scripts/test_fixes.py  # 本次修复的回归用例（49 项）
+.venv/Scripts/python.exe scripts/test_fixes.py  # 本次修复的回归用例（52 项）
+.venv/Scripts/python.exe scripts/test_review2.py  # 复审专项用例（33 项）
+.venv/Scripts/python.exe scripts/test_product.py   # 产品功能补齐用例（40 项）
+
+# 合计 212 项
 
 # 端到端（需服务已启动）
 .venv/Scripts/python.exe scripts/smoke.py http://127.0.0.1:8100

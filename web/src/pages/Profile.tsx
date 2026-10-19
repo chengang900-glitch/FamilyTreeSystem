@@ -22,6 +22,13 @@ export default function Profile() {
 
   if (!user) return null
 
+  const minPwd = user.password_min_length || 8
+  const strong = user.password_require_strong !== false
+  const pwdRules = [
+    { required: true, min: minPwd, message: `至少 ${minPwd} 位${strong ? '，且含字母与数字' : ''}` },
+    ...(strong ? [{ pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/, message: '需同时包含字母与数字' }] : []),
+  ]
+
   return (
     <div>
       <Card title="账号信息" style={{ marginBottom: 16 }}>
@@ -48,7 +55,7 @@ export default function Profile() {
           <Form.Item
             name="new_password"
             label="新密码"
-            rules={[{ required: true, min: 8, message: '至少 8 位，且含字母与数字' }]}
+            rules={pwdRules}
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>

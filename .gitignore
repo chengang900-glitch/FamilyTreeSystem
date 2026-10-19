@@ -25,3 +25,6 @@ server/webroot/
 .vscode/
 .DS_Store
 .workbuddy/
+.local/
+.playwright-cli/
+output/

@@ -28,7 +28,8 @@ RATE_IDLE_SECONDS = 120
 
 # 必须改密时仍可访问的接口（改密流程本身 + 身份查询 + 登出）
 MUST_CHANGE_ALLOW = {
-    '/api/auth/me', '/api/auth/password', '/api/auth/logout', '/api/health',
+    '/api/auth/me', '/api/auth/password', '/api/auth/logout',
+    '/api/auth/refresh', '/api/health',
 }
 PWD_CHANGE_REQUIRED = 4031
 
@@ -116,6 +117,7 @@ def create_app(config_path=None):
         _rate_limit()
         _csrf_check()
         _enforce_password_change()
+        _ensure_json_object()
 
     @app.after_request
     def _after(resp):
@@ -125,8 +127,8 @@ def create_app(config_path=None):
         resp.headers['Content-Security-Policy'] = _CSP
         if request.path.startswith('/api/') or resp.mimetype == 'text/html':
             resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        elif request.path.startswith('/assets/'):
-            # 构建产物文件名带内容哈希，可长期缓存
+        elif request.path.startswith('/assets/') and resp.status_code < 400:
+            # 构建产物文件名带内容哈希，可长期缓存；错误页不能伪装成静态资源缓存
             resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         if settings.get_bool('security.force_https', False):
             resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
@@ -140,7 +142,11 @@ def create_app(config_path=None):
     def _integrity(err):
         """约束冲突属于「入参不合法」，返回 400 而不是 500"""
         text = str(err)
-        if 'UNIQUE' in text:
+        if '成员 A 的本段次序已使用' in text:
+            msg = text
+        elif 'parentchild.family_id, parentchild.parent_id, parentchild.child_order' in text:
+            msg = '该父/母名下的子女排行已使用，男女统一排行；请核对或留空'
+        elif 'UNIQUE' in text:
             msg = '数据重复，已存在相同记录'
         elif 'FOREIGN KEY' in text:
             msg = '关联对象不存在或已被删除'
@@ -151,10 +157,14 @@ def create_app(config_path=None):
         app.logger.warning('integrity error: %s', text)
         return jsonify({'code': 400, 'msg': msg, 'data': None}), 400
 
+    @app.errorhandler(413)
+    def _too_large(err):
+        return jsonify({'code': 413, 'msg': '请求体超过大小上限', 'data': None}), 413
+
     @app.errorhandler(404)
     def _404(err):
-        if request.path.startswith('/api/'):
-            return jsonify({'code': 404, 'msg': '接口不存在', 'data': None}), 404
+        if request.path.startswith('/api/') or request.path.startswith('/assets/'):
+            return jsonify({'code': 404, 'msg': '资源不存在', 'data': None}), 404
         return _spa()
 
     @app.errorhandler(Exception)
@@ -170,6 +180,11 @@ def create_app(config_path=None):
     @app.get('/api/health')
     def health():
         return jsonify({'code': 0, 'msg': 'ok', 'data': {'time': now_str()}})
+
+    @app.get('/api/site')
+    def site_info():
+        return jsonify({'code': 0, 'msg': 'ok',
+                        'data': {'site_name': settings.get_str('site.name', '家谱管理系统')}})
 
     @app.get('/')
     def index():
@@ -255,17 +270,34 @@ def _enforce_password_change():
     raise ApiError('请先修改初始密码', code=PWD_CHANGE_REQUIRED, http_status=403)
 
 
+def _ensure_json_object():
+    """JSON 接口只接受对象根节点，避免 list/标量进入业务代码后触发 500。"""
+    if not request.path.startswith('/api/') or not request.is_json:
+        return
+    if not request.content_length:
+        return
+    data = request.get_json(silent=True)
+    if data is None:
+        raise ApiError('JSON 格式不合法', code=400)
+    if not isinstance(data, dict):
+        raise ApiError('请求体需为 JSON 对象', code=400)
+
+
 def _ensure_admin():
     """首次启动创建超管：口令取 FTS_ADMIN_PASSWORD，未设置则随机生成并仅打印一次"""
     row = query_one('SELECT COUNT(*) c FROM users')
     if row['c'] > 0:
         return
     password = os.environ.get('FTS_ADMIN_PASSWORD') or secrets.token_urlsafe(12)
-    execute(
-        'INSERT INTO users (username, password_hash, real_name, status, is_superuser,'
-        ' must_change_pwd, token_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        ('admin', generate_password_hash(password, method='scrypt'),
-         '超级管理员', 1, 1, 1, 1, now_str(), now_str()))
+    try:
+        execute(
+            'INSERT INTO users (username, password_hash, real_name, status, is_superuser,'
+            ' must_change_pwd, token_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+            ('admin', generate_password_hash(password, method='scrypt'),
+             '超级管理员', 1, 1, 1, 1, now_str(), now_str()))
+    except sqlite3.IntegrityError:
+        # 另一个 worker 已抢先创建超管，属于正常的启动竞态
+        return
     banner = (
         '\n' + '=' * 62 + '\n'
         '已创建超级管理员账号 admin\n'

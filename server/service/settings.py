@@ -7,7 +7,7 @@
 import time
 
 from server.common import now_str
-from server.db.conn import execute, query, query_one
+from server.db.conn import execute, query
 
 CACHE_TTL_SECONDS = 30
 
@@ -45,18 +45,20 @@ DEFAULTS = [
     ('storage.backup_enabled', 'true', 'bool', 'storage', '自动备份开关', ''),
     ('storage.backup_interval_minutes', '60', 'int', 'storage', '自动备份间隔（分钟）', ''),
     ('storage.backup_keep_count', '5', 'int', 'storage', '自动备份保留份数', ''),
+    ('storage.operation_log_retention_days', '0', 'int', 'storage', '操作日志保留天数',
+     '0 表示永久保留；大于 0 时在每次备份后清理更早的日志'),
 ]
 
 
 def ensure_defaults():
     ts = now_str()
     for key, value, typ, group, label, desc in DEFAULTS:
-        row = query_one('SELECT key FROM system_settings WHERE key=?', (key,))
-        if row is None:
-            execute(
-                'INSERT INTO system_settings (key, value, type, group_name, label, description, updated_at)'
-                ' VALUES (?,?,?,?,?,?,?)',
-                (key, value, typ, group, label, desc, ts))
+        # INSERT OR IGNORE：多 worker 同时首次启动时不会因 UNIQUE 冲突启动失败
+        execute(
+            'INSERT OR IGNORE INTO system_settings'
+            ' (key, value, type, group_name, label, description, updated_at)'
+            ' VALUES (?,?,?,?,?,?,?)',
+            (key, value, typ, group, label, desc, ts))
     for key in OBSOLETE_KEYS:
         execute('DELETE FROM system_settings WHERE key=?', (key,))
     invalidate()

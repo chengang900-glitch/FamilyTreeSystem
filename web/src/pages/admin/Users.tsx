@@ -4,6 +4,7 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { api } from '../../api'
+import { useStore } from '../../store'
 
 interface UserRow {
   id: number
@@ -19,6 +20,13 @@ interface UserRow {
 }
 
 export default function Users() {
+  const { user: me } = useStore()
+  const minPwd = me?.password_min_length || 8
+  const strong = me?.password_require_strong !== false
+  const pwdRules = [
+    { required: true, min: minPwd, message: `至少 ${minPwd} 位${strong ? '，且含字母与数字' : ''}` },
+    ...(strong ? [{ pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/, message: '需同时包含字母与数字' }] : []),
+  ]
   const [rows, setRows] = useState<UserRow[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<UserRow | null>(null)
@@ -89,7 +97,7 @@ export default function Users() {
         rowKey="id"
         dataSource={rows}
         scroll={{ x: 900 }}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: me?.page_size || 50 }}
         columns={[
           { title: '账号', dataIndex: 'username', width: 120 },
           { title: '姓名', dataIndex: 'real_name', width: 110 },
@@ -167,9 +175,19 @@ export default function Users() {
             <Form.Item
               name="password"
               label="初始密码"
-              rules={[{ required: true, min: 8, message: '至少 8 位，含字母与数字' }]}
+              rules={pwdRules}
             >
               <Input.Password />
+            </Form.Item>
+          )}
+          {!editing && (
+            <Form.Item
+              name="must_change_pwd"
+              label="首次登录需修改密码"
+              valuePropName="checked"
+              initialValue
+            >
+              <Switch />
             </Form.Item>
           )}
           <Form.Item name="real_name" label="姓名">
@@ -201,7 +219,7 @@ export default function Users() {
           <Form.Item
             name="password"
             label="新密码"
-            rules={[{ required: true, min: 8, message: '至少 8 位，含字母与数字' }]}
+            rules={pwdRules}
           >
             <Input.Password />
           </Form.Item>

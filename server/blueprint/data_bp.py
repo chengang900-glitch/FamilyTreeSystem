@@ -1,14 +1,14 @@
 """事件、文献资源、资源关联与鉴权下载"""
 import os
 import uuid
-from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from server.common import ApiError, now_str
 from server.db.conn import execute, query, query_one, transaction
-from server.service import audit, settings, valid
+from server.service import audit, dates, settings, valid
+from server.service.filepath import safe_upload_path, upload_root
 from server.service.permission import (
     assert_in_family, current_user, require_family, require_login,
 )
@@ -26,22 +26,70 @@ MIME_MAP = {
 }
 
 
-def _upload_dir(family_id) -> Path:
+def _upload_dir(family_id):
     slug = query_one('SELECT slug FROM family WHERE id=?', (family_id,))['slug']
-    path = Path(current_app.config['UPLOAD_DIR']) / slug
+    # slug 也来自数据库，统一走安全路径校验，防止历史脏数据逃逸上传根目录
+    path = safe_upload_path(slug)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 # ---------------- 事件 ----------------
+@bp.get('/<int:family_id>/relation-targets')
+@require_login
+@require_family('member')
+def relation_targets(family_id):
+    """文献关联对象统一分页搜索，只返回本谱 ID 与可公开姓名。"""
+    kind = request.args.get('entity_type')
+    sources = {
+        'person': ('person t', "t.name || '（第' || t.generation || '世）'"),
+        'branch': ('branch t', 't.name'),
+        'event': ('event t', 't.name'),
+        'marriage': ('marriage t JOIN person p1 ON p1.id=t.spouse1_id JOIN person p2 ON p2.id=t.spouse2_id',
+                     "p1.name || ' & ' || p2.name"),
+        'parentchild': ('parentchild t JOIN person p1 ON p1.id=t.parent_id JOIN person p2 ON p2.id=t.child_id',
+                        "p1.name || ' → ' || p2.name"),
+    }
+    if kind not in sources:
+        raise ApiError('关联实体类型不合法')
+    source, label = sources[kind]
+    page, size = valid.page_args()
+    args = [family_id]
+    where = 't.family_id=?'
+    keyword = (request.args.get('keyword') or '').strip()
+    if keyword:
+        where += f' AND ({label}) LIKE ?'
+        args.append(f'%{keyword}%')
+    total = query_one(f'SELECT COUNT(*) c FROM {source} WHERE {where}', args)['c']
+    rows = query(f'SELECT t.id,({label}) AS label FROM {source} WHERE {where}'
+                 ' ORDER BY t.id LIMIT ? OFFSET ?', args + [size, (page - 1) * size])
+    return jsonify({'code': 0, 'msg': 'ok', 'data': {
+        'items': [dict(r) for r in rows], 'total': total, 'page': page, 'size': size}})
+
+
 @bp.get('/<int:family_id>/events')
 @require_login
 @require_family('member')
 def event_list(family_id):
-    rows = query('SELECT e.*, b.name AS branch_name,'
+    kw = (request.args.get('keyword') or '').strip()
+    where, args = ['e.family_id=?'], [family_id]
+    if kw:
+        where.append('(e.name LIKE ? OR e.place LIKE ?)')
+        args += [f'%{kw}%', f'%{kw}%']
+    cond = ' AND '.join(where)
+    base = (' FROM event e LEFT JOIN branch b ON b.id=e.branch_id WHERE ')
+    if valid.paged_request():
+        page, size = valid.page_args()
+        total = query_one(f'SELECT COUNT(*) c{base}{cond}', args)['c']
+        rows = query(f'SELECT e.*, b.name AS branch_name,'
+                     ' (SELECT COUNT(*) FROM eventperson ep WHERE ep.event_id=e.id) AS person_count'
+                     f'{base}{cond} ORDER BY e.time DESC, e.id DESC LIMIT ? OFFSET ?',
+                     args + [size, (page - 1) * size])
+        return jsonify({'code': 0, 'msg': 'ok', 'data': {
+            'items': [dict(r) for r in rows], 'total': total, 'page': page, 'size': size}})
+    rows = query(f'SELECT e.*, b.name AS branch_name,'
                  ' (SELECT COUNT(*) FROM eventperson ep WHERE ep.event_id=e.id) AS person_count'
-                 ' FROM event e LEFT JOIN branch b ON b.id=e.branch_id'
-                 ' WHERE e.family_id=? ORDER BY e.time DESC, e.id DESC', (family_id,))
+                 f'{base}{cond} ORDER BY e.time DESC, e.id DESC', args)
     return jsonify({'code': 0, 'msg': 'ok', 'data': [dict(r) for r in rows]})
 
 
@@ -54,6 +102,7 @@ def event_create(family_id):
         raise ApiError('请输入事件名称')
     if not (data.get('time') or '').strip():
         raise ApiError('请输入事件时间')
+    date_values = dates.values(data, dates.DATE_FIELDS['event'])
     branch_id = valid.to_optional_id(data.get('branch_id'), 'branch_id')
     if branch_id is not None:
         assert_in_family('branch', branch_id, family_id)
@@ -65,6 +114,8 @@ def event_create(family_id):
          valid.to_int(data.get('type'), 'type', 1, minimum=1, maximum=2),
          data.get('description'), data.get('notes'), branch_id, ts, ts))
     audit.log(current_user()['id'], family_id, 'create_event', 'event', eid, data['name'])
+    execute('UPDATE event SET time_iso=?,time_precision=? WHERE id=?',
+            (date_values.get('time_iso'), date_values.get('time_precision'), eid))
     return jsonify({'code': 0, 'msg': '事件已添加', 'data': {'id': eid}})
 
 
@@ -73,6 +124,7 @@ def event_create(family_id):
 @require_family('admin')
 def event_update(family_id, eid):
     assert_in_family('event', eid, family_id)
+    current = query_one('SELECT * FROM event WHERE id=?', (eid,))
     data = request.get_json(silent=True) or {}
     fields, args = [], []
     for key in ('name', 'time', 'place', 'description', 'notes'):
@@ -89,10 +141,16 @@ def event_update(family_id, eid):
         fields.append('branch_id=?')
         args.append(branch_id)
     if fields:
+        for key, value in dates.values(data, dates.DATE_FIELDS['event'], current=current).items():
+            if key != 'time':
+                fields.append(f'{key}=?')
+                args.append(value)
         fields.append('updated_at=?')
         args += [now_str(), eid]
         execute(f'UPDATE event SET {",".join(fields)} WHERE id=?', args)
-    audit.log(current_user()['id'], family_id, 'update_event', 'event', eid)
+    audit.log(current_user()['id'], family_id, 'update_event', 'event', eid,
+              audit.change(current, data, ('name', 'time', 'place', 'type',
+                                           'description', 'notes', 'branch_id')))
     return jsonify({'code': 0, 'msg': '已保存', 'data': None})
 
 
@@ -144,7 +202,9 @@ def event_person_add(family_id, eid):
 @require_family('admin')
 def event_person_remove(family_id, eid, epid):
     assert_in_family('event', eid, family_id)
-    execute('DELETE FROM eventperson WHERE id=? AND family_id=?', (epid, family_id))
+    execute('DELETE FROM eventperson WHERE id=? AND event_id=? AND family_id=?',
+            (epid, eid, family_id))
+    audit.log(current_user()['id'], family_id, 'event_remove_person', 'event', eid, str(epid))
     return jsonify({'code': 0, 'msg': '已移除', 'data': None})
 
 
@@ -162,7 +222,15 @@ def resource_list(family_id):
     if rtype is not None:
         where.append('type=?')
         args.append(rtype)
-    rows = query(f'SELECT * FROM resource WHERE {" AND ".join(where)} ORDER BY id DESC', args)
+    cond = ' AND '.join(where)
+    if valid.paged_request():
+        page, size = valid.page_args()
+        total = query_one(f'SELECT COUNT(*) c FROM resource WHERE {cond}', args)['c']
+        rows = query(f'SELECT * FROM resource WHERE {cond} ORDER BY id DESC LIMIT ? OFFSET ?',
+                     args + [size, (page - 1) * size])
+        return jsonify({'code': 0, 'msg': 'ok', 'data': {
+            'items': [dict(r) for r in rows], 'total': total, 'page': page, 'size': size}})
+    rows = query(f'SELECT * FROM resource WHERE {cond} ORDER BY id DESC', args)
     return jsonify({'code': 0, 'msg': 'ok', 'data': [dict(r) for r in rows]})
 
 
@@ -189,12 +257,20 @@ def resource_upload(family_id):
     stored = f'{fid}_{safe}'
     target = _upload_dir(family_id) / stored
     file.save(str(target))
-    rel = str(target.relative_to(current_app.config['UPLOAD_DIR'])).replace('\\', '/')
-    rid = execute(
-        'INSERT INTO resource (family_id, name, fid, type, storage_path, file_size, mime_type,'
-        ' description, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-        (family_id, name, fid, rtype, rel, size, MIME_MAP.get(ext, file.mimetype),
-         request.form.get('description'), request.form.get('notes'), now_str(), now_str()))
+    rel = target.relative_to(upload_root()).as_posix()
+    try:
+        rid = execute(
+            'INSERT INTO resource (family_id, name, fid, type, storage_path, file_size, mime_type,'
+            ' description, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (family_id, name, fid, rtype, rel, size, MIME_MAP.get(ext, file.mimetype),
+             request.form.get('description'), request.form.get('notes'), now_str(), now_str()))
+    except Exception:
+        # 数据库写入失败时不要留下孤儿文件
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise
     audit.log(current_user()['id'], family_id, 'upload_resource', 'resource', rid, name)
     return jsonify({'code': 0, 'msg': '资源已入库', 'data': {'id': rid, 'fid': fid}})
 
@@ -219,7 +295,8 @@ def resource_update(family_id, rid):
         fields.append('updated_at=?')
         args += [now_str(), rid]
         execute(f'UPDATE resource SET {",".join(fields)} WHERE id=?', args)
-    audit.log(current_user()['id'], family_id, 'update_resource', 'resource', rid)
+    audit.log(current_user()['id'], family_id, 'update_resource', 'resource', rid,
+              audit.change(row, data, ('name', 'type', 'description', 'notes')))
     return jsonify({'code': 0, 'msg': '已保存', 'data': None})
 
 
@@ -230,12 +307,16 @@ def resource_delete(family_id, rid):
     row = query_one('SELECT * FROM resource WHERE id=?', (rid,))
     if row is None or row['family_id'] != family_id:
         raise ApiError('资源不存在', code=404)
-    path = Path(current_app.config['UPLOAD_DIR']) / row['storage_path']
+    # 只有位于上传目录内的路径才允许删文件；非法路径仅删除数据库记录
+    try:
+        path = safe_upload_path(row['storage_path'])
+    except ApiError:
+        path = None
     with transaction():
         execute('DELETE FROM resource_relation WHERE resource_id=? AND family_id=?', (rid, family_id))
         execute('DELETE FROM resource WHERE id=?', (rid,))
     # 数据库记录提交成功后再删文件，避免事务回滚后文件已丢失
-    if path.exists():
+    if path is not None and path.is_file():
         try:
             path.unlink()
         except OSError:
@@ -291,7 +372,10 @@ def resource_relation_add(family_id, rid):
 @require_login
 @require_family('admin')
 def resource_relation_del(family_id, rid, relid):
-    execute('DELETE FROM resource_relation WHERE id=? AND family_id=?', (relid, family_id))
+    execute('DELETE FROM resource_relation WHERE id=? AND resource_id=? AND family_id=?',
+            (relid, rid, family_id))
+    audit.log(current_user()['id'], family_id, 'delete_resource_relation', 'resource', rid,
+              str(relid))
     return jsonify({'code': 0, 'msg': '关联已移除', 'data': None})
 
 
@@ -303,9 +387,9 @@ def file_download(family_id, rid):
     row = query_one('SELECT * FROM resource WHERE id=? AND family_id=?', (rid, family_id))
     if row is None:
         raise ApiError('资源不存在', code=404)
-    path = Path(current_app.config['UPLOAD_DIR']) / row['storage_path']
-    if not path.exists():
-        raise ApiError('文件已丢失', code=404)
+    path = safe_upload_path(row['storage_path'], must_exist=True)
     ext = path.suffix.lstrip('.')
-    return send_file(str(path), as_attachment=True, download_name=f'{row["name"]}.{ext}'
+    inline = request.args.get('inline') in ('1', 'true', 'True')
+    return send_file(str(path), as_attachment=not inline,
+                     download_name=f'{row["name"]}.{ext}'
                      if ext and not row['name'].endswith(ext) else row['name'])

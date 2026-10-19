@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Select, Space, Typography } from 'antd'
+import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Select, Space, Typography, theme } from 'antd'
 import {
   AppstoreOutlined, BranchesOutlined, BookOutlined, FileImageOutlined,
   HomeOutlined, LogoutOutlined, MenuOutlined, PrinterOutlined, ProfileOutlined,
   SettingOutlined, TeamOutlined, UserOutlined, ApartmentOutlined, SwapOutlined,
   DatabaseOutlined, CalendarOutlined, HeartOutlined, SafetyCertificateOutlined,
+  MoonOutlined, SunOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { message } from 'antd'
@@ -14,7 +15,8 @@ import { useStore } from '../store'
 const { Header, Sider, Content } = Layout
 
 export default function AppLayout() {
-  const { user, familyId, setFamily, clear } = useStore()
+  const { user, familyId, setFamily, clear, dark, toggleDark } = useStore()
+  const { token } = theme.useToken()
   const nav = useNavigate()
   const loc = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
@@ -33,7 +35,11 @@ export default function AppLayout() {
         { key: '/pedigree', icon: <AppstoreOutlined />, label: '世系树' },
         { key: '/exchange', icon: <SwapOutlined />, label: '导入导出' },
         { key: '/print', icon: <PrinterOutlined />, label: '族谱付印' },
-        ...(writeable ? [{ key: '/members', icon: <TeamOutlined />, label: '家谱成员' }] : []),
+        ...(writeable ? [
+          { key: '/members', icon: <TeamOutlined />, label: '家谱成员' },
+          { key: '/family-logs', icon: <SafetyCertificateOutlined />, label: '本谱日志' },
+          { key: '/backup', icon: <DatabaseOutlined />, label: '备份与恢复' },
+        ] : []),
       ]
     : []
 
@@ -64,8 +70,9 @@ export default function AppLayout() {
   const header = (
     <Header
       style={{
-        background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: mobile ? '0 12px' : '0 24px', borderBottom: '1px solid #f0f0f0',
+        background: token.colorBgContainer, display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', padding: mobile ? '0 12px' : '0 24px',
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
       <Space size={8}>
@@ -89,6 +96,12 @@ export default function AppLayout() {
             }))}
           />
         )}
+        <Button
+          type="text"
+          aria-label="切换主题"
+          icon={dark ? <SunOutlined /> : <MoonOutlined />}
+          onClick={toggleDark}
+        />
         <Dropdown
           menu={{
             items: [
@@ -117,7 +130,8 @@ export default function AppLayout() {
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {!mobile && (
-        <Sider theme="light" width={200} style={{ borderRight: '1px solid #f0f0f0' }}>
+        <Sider theme={dark ? 'dark' : 'light'} width={200}
+          style={{ borderRight: `1px solid ${token.colorBorderSecondary}` }}>
           <div style={{ padding: '16px 20px', fontWeight: 600, fontSize: 15 }}>
             <DatabaseOutlined /> 家谱管理
           </div>
@@ -131,7 +145,8 @@ export default function AppLayout() {
       )}
       <Layout>
         {header}
-        <Content style={{ padding: mobile ? 12 : 20, background: '#f7f5f2', paddingBottom: mobile ? 76 : 20 }}>
+        <Content style={{ padding: mobile ? 12 : 20, background: token.colorBgLayout,
+          paddingBottom: mobile ? 76 : 20 }}>
           <Outlet />
         </Content>
       </Layout>
@@ -173,6 +188,22 @@ export default function AppLayout() {
             width={240}
             styles={{ body: { padding: 0 } }}
           >
+            {user && user.families.length > 0 && (
+              <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+                <Select
+                  style={{ width: '100%' }}
+                  value={familyId || undefined}
+                  onChange={(v) => {
+                    setFamily(v)
+                    setMoreOpen(false)
+                  }}
+                  options={user.families.map((f) => ({
+                    value: f.id,
+                    label: `${f.name}${f.role === 'admin' ? '（管理员）' : ''}`,
+                  }))}
+                />
+              </div>
+            )}
             <Menu
               mode="inline"
               selectedKeys={[loc.pathname]}

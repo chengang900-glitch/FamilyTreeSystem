@@ -16,3 +16,6 @@ docs
 scripts
 *.md
 deploy/certs
+.local
+.playwright-cli
+output
