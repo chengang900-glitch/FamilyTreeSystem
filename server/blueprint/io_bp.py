@@ -554,7 +554,7 @@ def _apply_json(family_id, data, ts, resource_files=None):
                      [family_id, _clamp(p.get('generation'), 1, 999, 1),
                       (_as_text(p.get('name')) or '').strip() or '未命名',
                       _as_text(p.get('courtesy_name')), _as_text(p.get('art_name')),
-                      _clamp(p.get('type'), 1, 6, 1), _as_text(p.get('birth_date')),
+                      _clamp(p.get('type'), 1, 8, 1), _as_text(p.get('birth_date')),
                       _as_text(p.get('birth_place')), _as_text(p.get('death_date')),
                       _as_text(p.get('bury_address')), _as_text(p.get('record')),
                       _as_text(p.get('notes')),

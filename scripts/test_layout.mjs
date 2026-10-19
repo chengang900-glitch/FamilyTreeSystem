@@ -34,8 +34,7 @@ for(const kind of ['tree','side','spine','ring','fan'])for(const orientation of 
   })
   if(['tree','side','spine'].includes(kind))check(`${kind}/${orientation} 配偶同世代分区、双亲分组与层级`,()=>{
     const pos=new Map(scene.nodes.map(n=>[n.id,n]));const rank=kind!=='spine' && orientation==='vertical'?'y':'x'
-    if(kind==='tree' && orientation==='horizontal')assert.equal(scene.areas.length,0)
-    else {assert.ok(scene.areas.some(a=>a.memberIds.includes(2)&&a.memberIds.includes(3)));assert.ok(scene.areas.some(a=>a.memberIds.includes(4)&&a.memberIds.includes(6)))}
+    {assert.ok(scene.areas.some(a=>a.memberIds.includes(2)&&a.memberIds.includes(3)));assert.ok(scene.areas.some(a=>a.memberIds.includes(4)&&a.memberIds.includes(6)))}
     assert.ok(pos.get(3)[rank]>pos.get(2)[rank]);assert.ok(pos.get(6)[rank]>pos.get(4)[rank])
     assert.ok(pos.get(1)[rank]<pos.get(2)[rank] && pos.get(2)[rank]<pos.get(4)[rank] && pos.get(4)[rank]<pos.get(7)[rank])
     assert.deepEqual(scene.families.find(f=>f.parents.includes(2) && f.parents.includes(3)).children.map(x=>x.id).sort(),[4,5])
@@ -152,17 +151,16 @@ for(const kind of ['tree','side','spine','ring','fan'])for(const orientation of 
 })
 console.log(`最终布局检查：${passed} 项通过`)
 
-check('横向树的子女从对应妻子、女婿底部向下接出',()=>{
+check('横向树从对应妻子、女婿右侧接出，下一代位于家庭分区右侧',()=>{
   const scene=buildScene('tree',extended,1,'horizontal',false,{marriages:extendedMarriages}),pos=new Map(scene.nodes.map(n=>[n.id,n]))
   for(const [childId,spouseId] of [[4,2],[5,2],[6,3],[9,7]]){
     const child=pos.get(childId),spouse=pos.get(spouseId),edge=scene.edges.find(e=>e.targetId===childId)
     assert.equal(edge.sourceId,spouseId)
-    assert.deepEqual(edge.points[0],{x:spouse.x+NODE_W/2,y:spouse.y+NODE_H})
-    assert.ok(edge.points[1].y>edge.points[0].y)
-    assert.equal(child.x,spouse.x);assert.ok(child.y>=spouse.y+NODE_H+56)
+    assert.deepEqual(edge.points[0],{x:spouse.x+NODE_W,y:spouse.y+NODE_H/2})
+    assert.ok(edge.points[1].x>edge.points[0].x)
+    const area=scene.areas.find(a=>a.memberIds.includes(spouseId))
+    assert.ok(area);assert.ok(child.x>area.x+area.width)
   }
-  const firstChildren=[pos.get(4),pos.get(5)],secondWife=pos.get(3)
-  assert.ok(firstChildren.every(n=>n.y+NODE_H<secondWife.y),'下一段婚姻不插在上一段的子女之间')
   noOverlap(scene);noCrossCard(scene)
 })
 check('仅有父亲记录时不能按唯一配偶虚构母亲关系',()=>{
@@ -173,3 +171,33 @@ check('仅有父亲记录时不能按唯一配偶虚构母亲关系',()=>{
   assert.ok(!scene.families.some(f=>f.parents.includes(2)&&f.children.some(c=>c.id===3)))
 })
 console.log(`本轮布局检查：${passed} 项通过`)
+
+const screenshotFamily=[node(101,17,1,[],[102,104]),node(102,18,1,[101],[],[103]),node(103,18,3,[],[],[102]),
+  node(104,18,1,[101],[106,107,108,109],[105]),node(105,18,3,[],[106,107,108,109],[104]),
+  node(106,19,1,[104,105]),node(107,19,1,[104,105]),node(108,19,2,[104,105],[111],[110]),
+  node(109,19,2,[104,105]),node(110,19,4,[],[111],[108]),node(111,20,5,[108,110])]
+const screenshotRelations={marriages:[{id:21,spouse1_id:102,spouse2_id:103,marriage_order:1},
+  {id:22,spouse1_id:104,spouse2_id:105,marriage_order:1},{id:23,spouse1_id:108,spouse2_id:110,marriage_order:1}]}
+check('截图横向：恢复夫妻框，所有亲子线从配偶右侧接出',()=>{
+  const scene=buildScene('tree',screenshotFamily,101,'horizontal',false,screenshotRelations)
+  const pos=new Map(scene.nodes.map(n=>[n.id,n]))
+  for(const [a,b] of [[102,103],[104,105],[108,110]])assert.equal(pos.get(a).y,pos.get(b).y,'夫妻不应被子孙数量拉开')
+  const routes=[106,107,108,109].map(id=>scene.edges.find(e=>e.targetId===id))
+  for(const edge of routes){
+    const target=pos.get(edge.targetId),end=edge.points.at(-1),previous=edge.points.at(-2)
+    assert.deepEqual(end,{x:target.x,y:target.y+NODE_H/2})
+    assert.ok(previous.x<end.x && previous.y===end.y,'多子女箭头应从左侧进入，避免绕回顶部')
+    assert.deepEqual(edge.points[0],{x:pos.get(105).x+NODE_W,y:pos.get(105).y+NODE_H/2})
+    assert.ok(edge.points[1].x>edge.points[0].x)
+  }
+  const single=scene.edges.find(e=>e.targetId===111),target=pos.get(111)
+  assert.deepEqual(single.points.at(-1),{x:target.x,y:target.y+NODE_H/2})
+  assert.deepEqual(single.points[0],{x:pos.get(110).x+NODE_W,y:pos.get(110).y+NODE_H/2})
+  assert.equal(scene.areas.length,3)
+  for(const area of scene.areas)for(const n of scene.nodes){
+    if(area.memberIds.includes(n.id))continue
+    assert.ok(n.x+NODE_W<=area.x || n.x>=area.x+area.width || n.y+NODE_H<=area.y || n.y>=area.y+area.height,'夫妻框不能包含子女或其他家庭')
+  }
+  noOverlap(scene);noCrossCard(scene)
+})
+console.log(`横向连线回归：${passed} 项通过`)

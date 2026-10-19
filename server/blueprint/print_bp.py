@@ -54,6 +54,11 @@ bp = Blueprint('print', __name__, url_prefix='/api/families')
 def _load(family_id, root_id, mode, generations):
     fam = query_one('SELECT * FROM family WHERE id=?', (family_id,))
     persons = query('SELECT * FROM person WHERE family_id=? ORDER BY generation, id', (family_id,))
+    # 其他（男/女）可登记及显示，但不进入任何族谱付印正文或亲属附注。
+    excluded = {p['id'] for p in persons if p['type'] in (7, 8)}
+    if mode == 'person' and root_id in excluded:
+        raise ApiError('其他类型成员不纳入族谱付印，请选择本谱成员')
+    persons = [p for p in persons if p['id'] not in excluded]
     # 付印与详情页共用脱敏规则，普通成员不能借导出 PDF/Word 绕过隐私设置
     pmap = {p['id']: privacy.mask_person(p) for p in persons}
     children = {}

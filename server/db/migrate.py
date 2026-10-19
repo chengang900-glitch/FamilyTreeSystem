@@ -77,7 +77,7 @@ _CONSTRAINTS = [
     'UPDATE person SET generation=1 WHERE generation IS NULL'
     ' OR CAST(generation AS INTEGER) < 1',
     'UPDATE person SET type=1 WHERE type IS NULL'
-    ' OR CAST(type AS INTEGER) NOT BETWEEN 1 AND 6',
+    ' OR CAST(type AS INTEGER) NOT BETWEEN 1 AND 8',
     'UPDATE person SET is_private=0 WHERE is_private IS NULL',
     'UPDATE marriage SET marriage_order=1 WHERE marriage_order IS NULL'
     ' OR CAST(marriage_order AS INTEGER) < 1',
@@ -250,3 +250,61 @@ def ensure_child_order(con, backup_dir):
     except BaseException:
         con.execute('ROLLBACK')
         raise
+
+
+def ensure_person_types(con, backup_dir):
+    """将旧人物表类型范围扩到8；保留原DDL、数据、索引、触发器及自增序列。"""
+    import os
+    import sqlite3
+    from datetime import datetime
+    from pathlib import Path
+    old_check = re.compile(r'CHECK\s*\(\s*type\s+BETWEEN\s+1\s+AND\s+6\s*\)', re.I)
+    def ddl():
+        return con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='person'").fetchone()[0]
+    if not old_check.search(ddl()):
+        return
+    directory = Path(backup_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    snapshot = directory / ('before_person_types_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.db')
+    with sqlite3.connect(snapshot) as target:
+        con.backup(target)
+    os.chmod(snapshot, 0o600)
+    fk = con.execute('PRAGMA foreign_keys').fetchone()[0]
+    legacy = con.execute('PRAGMA legacy_alter_table').fetchone()[0]
+    try:
+        con.execute('PRAGMA foreign_keys=OFF')
+        con.execute('PRAGMA legacy_alter_table=ON')
+        con.execute('BEGIN IMMEDIATE')
+        original = ddl()
+        # 等待写锁期间另一worker可能已经迁移；持锁后再次确认。
+        if not old_check.search(original):
+            con.execute('COMMIT')
+            return
+        objects = con.execute("SELECT sql FROM sqlite_master WHERE tbl_name='person'"
+                              " AND type IN ('index','trigger') AND sql IS NOT NULL").fetchall()
+        sequence = con.execute("SELECT seq FROM sqlite_sequence WHERE name='person'").fetchone()
+        new = old_check.sub('CHECK (type BETWEEN 1 AND 8)', original)
+        new, count = re.subn(r'^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:person|"person"|`person`|\[person\])(?=\s*\()',
+                             'CREATE TABLE person__types_new', new, count=1, flags=re.I)
+        if count != 1:
+            raise RuntimeError('无法识别人物表定义，已停止类型迁移')
+        con.execute(new)
+        columns = ','.join('"' + c.replace('"', '""') + '"' for c in _columns(con, 'person'))
+        con.execute(f'INSERT INTO person__types_new ({columns}) SELECT {columns} FROM person')
+        con.execute('DROP TABLE person')
+        con.execute('ALTER TABLE person__types_new RENAME TO person')
+        for row in objects:
+            con.execute(row[0])
+        if sequence:
+            con.execute("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='person'", (sequence[0],))
+        if con.execute('PRAGMA foreign_key_check').fetchall():
+            raise RuntimeError('人物类型迁移外键校验失败，已回滚')
+        con.execute('COMMIT')
+        logger.info('[migrate] 人物类型已扩展到8，迁移前快照：%s', snapshot.name)
+    except BaseException:
+        if con.in_transaction:
+            con.execute('ROLLBACK')
+        raise
+    finally:
+        con.execute(f'PRAGMA foreign_keys={1 if fk else 0}')
+        con.execute(f'PRAGMA legacy_alter_table={1 if legacy else 0}')

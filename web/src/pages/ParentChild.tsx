@@ -81,7 +81,7 @@ export default function ParentChild() {
 
   const edit = (r: Row) => {
     editForm.resetFields()
-    editForm.setFieldsValue({ ...r, parent_role: [1, 4, 5].includes(r.parent_type) ? 'father' : 'mother' })
+    editForm.setFieldsValue({ ...r, parent_role: [1, 4, 5, 7].includes(r.parent_type) ? 'father' : 'mother' })
     setEditing(r)
   }
   const saveEdit = async () => {
@@ -197,7 +197,7 @@ export default function ParentChild() {
             <Select onChange={() => editForm.setFieldValue('parent_id', undefined)} options={[{ value: 'father', label: '父亲' }, { value: 'mother', label: '母亲' }]} />
           </Form.Item>
           <Form.Item name="parent_id" label="父/母成员" rules={[{ required: true, message: '请选择父/母成员' }]}>
-            <PersonSelect allowedTypes={editRole === 'father' ? [1, 4, 5] : [2, 3, 6]} style={{ width: '100%' }} />
+            <PersonSelect allowedTypes={editRole === 'father' ? [1, 4, 5, 7] : [2, 3, 6, 8]} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="child_id" label="子女" rules={[{ required: true, message: '请选择子女' }]}><PersonSelect style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="type" label="关系类型" rules={[{ required: true }]}><Select options={Object.entries(PC_TYPES).map(([k, v]) => ({ value: Number(k), label: v }))} /></Form.Item>
@@ -209,8 +209,8 @@ export default function ParentChild() {
       <Modal open={open} title="登记父母与子女" width={760} onCancel={() => setOpen(false)} onOk={save} destroyOnClose>
         <Form form={form} layout="vertical">
           <Space wrap align="start">
-            <Form.Item name="father_id" label="父亲（父母至少选择一方）"><PersonSelect allowedTypes={[1, 4, 5]} excludeIds={mother ? [mother] : []} placeholder="选择宗男、姻婿或外孙" style={{ width: 280 }} /></Form.Item>
-            <Form.Item name="mother_id" label="母亲"><PersonSelect allowedTypes={[2, 3, 6]} excludeIds={father ? [father] : []} placeholder="选择宗女、姻媳或外孙女" style={{ width: 280 }} /></Form.Item>
+            <Form.Item name="father_id" label="父亲（父母至少选择一方）"><PersonSelect allowedTypes={[1, 4, 5, 7]} excludeIds={mother ? [mother] : []} placeholder="选择宗男、姻婿、外孙或其他（男）" style={{ width: 280 }} /></Form.Item>
+            <Form.Item name="mother_id" label="母亲"><PersonSelect allowedTypes={[2, 3, 6, 8]} excludeIds={father ? [father] : []} placeholder="选择宗女、姻媳、外孙女或其他（女）" style={{ width: 280 }} /></Form.Item>
           </Space>
           <p>请为本批子女选择对应父母；再婚家庭中，不同母亲的子女请分批登记。身份不详时可留空一方。</p>
           <Form.List name="children" rules={[{ validator: async (_, rows) => {

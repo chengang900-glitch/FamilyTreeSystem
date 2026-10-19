@@ -273,10 +273,10 @@ def person_list(family_id):
     page, size = valid.page_args()
     kw = (request.args.get('keyword') or '').strip()
     gen = valid.query_int('generation', minimum=1)
-    ptype = valid.query_int('type', minimum=1, maximum=6)
+    ptype = valid.query_int('type', minimum=1, maximum=8)
     types = None
     if 'types' in request.args:
-        types = [valid.to_int(value, 'types', minimum=1, maximum=6)
+        types = [valid.to_int(value, 'types', minimum=1, maximum=8)
                  for value in request.args['types'].split(',')]
         if not types or any(value is None for value in types):
             raise ApiError('成员类型筛选不合法')
@@ -331,7 +331,7 @@ def person_create(family_id):
     gen = valid.to_int(data.get('generation'), 'generation', minimum=1, maximum=999)
     if gen is None:
         raise ApiError('世代需为正整数')
-    ptype = valid.to_int(data.get('type'), 'type', 1, minimum=1, maximum=6)
+    ptype = valid.to_int(data.get('type'), 'type', 1, minimum=1, maximum=8)
     valid.check_date_order(data.get('birth_date'), data.get('death_date'), '逝世日期')
     branch_id = valid.to_optional_id(data.get('branch_id'), 'branch_id')
     if branch_id is not None:
@@ -376,7 +376,7 @@ def person_update(family_id, pid):
     if 'generation' in data:
         put('generation', valid.to_int(data.get('generation'), 'generation', minimum=1, maximum=999))
     if 'type' in data:
-        put('type', valid.to_int(data.get('type'), 'type', minimum=1, maximum=6))
+        put('type', valid.to_int(data.get('type'), 'type', minimum=1, maximum=8))
     if 'branch_id' in data:
         branch_id = valid.to_optional_id(data.get('branch_id'), 'branch_id')
         if branch_id is not None:
@@ -660,11 +660,11 @@ def _pc_create_family(family_id, data):
         assert_in_family('person', pid, family_id)
     ts, count = now_str(), 0
     with transaction():
-        for parent, allowed, title in ((father, (1, 4, 5), '父亲'), (mother, (2, 3, 6), '母亲')):
+        for parent, allowed, title in ((father, (1, 4, 5, 7), '父亲'), (mother, (2, 3, 6, 8), '母亲')):
             if parent:
                 person = query_one('SELECT type FROM person WHERE id=? AND family_id=?', (parent, family_id))
                 if not person or person['type'] not in allowed:
-                    choices = '宗男、姻婿或外孙' if title == '父亲' else '宗女、姻媳或外孙女'
+                    choices = '宗男、姻婿、外孙或其他（男）' if title == '父亲' else '宗女、姻媳、外孙女或其他（女）'
                     raise ApiError(f'{title}只能选择{choices}，请检查成员类型')
         for parent, child, kind in entries:
             _assert_no_cycle(family_id, parent, child)
@@ -707,7 +707,7 @@ def pc_update(family_id, pcid):
         if role not in ('father', 'mother'):
             raise ApiError('父母身份不合法')
         parent = query_one('SELECT type FROM person WHERE id=? AND family_id=?', (parent_id, family_id))
-        allowed = (1, 4, 5) if role == 'father' else (2, 3, 6)
+        allowed = (1, 4, 5, 7) if role == 'father' else (2, 3, 6, 8)
         if parent['type'] not in allowed:
             raise ApiError('所选父/母与成员类型不符')
     if query_one('SELECT id FROM parentchild WHERE family_id=? AND parent_id=? AND child_id=? AND id<>?',

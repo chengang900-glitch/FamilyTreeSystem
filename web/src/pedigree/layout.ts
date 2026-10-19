@@ -73,7 +73,7 @@ export interface Edge {
 export interface FamilyArea extends Rect { id: string; label: string; memberIds: number[] }
 export interface Scene { areas: FamilyArea[]; nodes: Laid[]; families: Family[]; edges: Edge[]; warnings: string[]; bounds: ReturnType<typeof boundsOf> }
 const PC: Record<number, string> = {1:'亲生',2:'过继',3:'收养',4:'继养',5:'亲女',6:'养女',7:'继女'}
-const male = (n: PNode) => [1,4,5].includes(n.type)
+const male = (n: PNode) => [1,4,5,7].includes(n.type)
 
 function relationships(nodes: PNode[], relations: Relations) {
   const ids = new Set(nodes.map(n => n.id))
@@ -141,8 +141,6 @@ function familyLayout(nodes: PNode[], families: Family[], pc: ParentChild[], kin
   })
   const radial = kind === 'ring' || kind === 'fan'
   const vertical = radial || orientation === 'vertical', crossSize = vertical ? NODE_W : NODE_H, depthSize = vertical ? NODE_H : NODE_W
-  const spouseDown = kind === 'tree' && !vertical
-  const childDrop = (lane: Lane) => spouseDown && lane.members.length && lane.children.length ? NODE_H + 56 : 0
   const minGen = Math.min(...nodes.map(n => n.generation)), auxDepth = depthSize + (vertical ? 44 : 104)
   blocks.forEach(b => {
     const degree = (id: number) => families.filter(f => f.parents.length === 2 && f.parents.includes(id)).length
@@ -207,13 +205,14 @@ function familyLayout(nodes: PNode[], families: Family[], pc: ParentChild[], kin
     b.lanes.forEach(l => {
       const own = l.members.length * crossSize + Math.max(0, l.members.length - 1) * GAP_X
       const kids = l.children.reduce((s, c) => s + blocks.get(c)!.span, 0) + Math.max(0, l.children.length - 1) * GAP_X
-      l.span = Math.max(crossSize, own, kids + childDrop(l))
+      l.span = Math.max(crossSize, own, kids)
     })
     b.span = Math.max(crossSize, b.lanes.reduce((s, l) => s + l.span, 0) + Math.max(0, b.lanes.length - 1) * GAP_X,
       radial ? b.members.length * (NODE_W + GAP_X) : 0)
     b.primaryCross = (b.span - crossSize) / 2
     let cursor = (b.span - b.lanes.reduce((s, l) => s + l.span, 0) - Math.max(0, b.lanes.length - 1) * GAP_X) / 2
     b.lanes.forEach(l => { l.left = cursor; cursor += l.span + GAP_X })
+
   })
   let cursor = 0
   const pending: { id: number; left: number }[] = []
@@ -222,8 +221,7 @@ function familyLayout(nodes: PNode[], families: Family[], pc: ParentChild[], kin
     const { id, left } = pending[i], b = blocks.get(id)!; b.cross = left
     b.lanes.forEach(l => {
       const total = l.children.reduce((s, c) => s + blocks.get(c)!.span, 0) + Math.max(0, l.children.length - 1) * GAP_X
-      const drop = childDrop(l)
-      let childLeft = left + l.left + drop + (l.span - drop - total) / 2
+      let childLeft = left + l.left + (l.span - total) / 2
       l.children.forEach(c => { pending.push({ id: c, left: childLeft }); childLeft += blocks.get(c)!.span + GAP_X })
     })
     // 不属于可确定双亲组合的跨世代关联仍保留，几何上给予独立空间。
@@ -253,23 +251,23 @@ function familyLayout(nodes: PNode[], families: Family[], pc: ParentChild[], kin
   levels.forEach(rank => {
     depths.set(rank, depth)
     const hasAux = [...blocks.values()].some(b => b.rank === rank && b.members.length > 1)
-    // 横向树的下一代落在配偶正下方；下一代的配偶再向右展开。
-    depth += spouseDown ? auxDepth : depthSize + (hasAux ? auxDepth : 0) + 104
+    // 每代为配偶辅助位置预留空间，子女始终位于整个家庭分区之后。
+    depth += depthSize + (hasAux ? auxDepth : 0) + 104
   })
   let out: Laid[] = []
   blocks.forEach(b => {
     const local = new Map<number, { cross: number; depth: number }>([[b.primary.id, { cross: b.primaryCross, depth: 0 }]])
     b.lanes.forEach(l => {
       const own = l.members.length * crossSize + Math.max(0, l.members.length - 1) * GAP_X
-      l.members.forEach((id, i) => local.set(id, { cross: l.left + (childDrop(l) ? 0 : (l.span - own) / 2) + i * (crossSize + GAP_X), depth: auxDepth }))
+      l.members.forEach((id, i) => local.set(id, { cross: l.left + (l.span - own) / 2 + i * (crossSize + GAP_X), depth: auxDepth }))
     })
     b.members.forEach((n, i) => {
       const p = local.get(n.id) || { cross: i * (crossSize + GAP_X), depth: auxDepth }
       out.push({ id: n.id, node: n, x: vertical ? b.cross + p.cross : depths.get(b.rank)! + p.depth,
         y: vertical ? depths.get(b.rank)! + p.depth : b.cross + p.cross })
     })
-    // 横向树的不同世代会共用一列，不能用大矩形把其中的后代标成同代。
-    if (b.members.length > 1 && !radial && !spouseDown) {
+    // 夫妻同代分区仅覆盖该组成员，后代排在分区外。
+    if (b.members.length > 1 && !radial) {
       const group = out.filter(n => find(n.id) === b.id), x = Math.min(...group.map(n => n.x)) - 16, y = Math.min(...group.map(n => n.y)) - 32
       areas.push({ id: String(b.id), x, y, width: Math.max(...group.map(n => n.x + NODE_W)) - x + 16,
         height: Math.max(...group.map(n => n.y + NODE_H)) - y + 16, memberIds: b.members.map(n => n.id), label: `第${b.primary.generation}世 · 同代` })
@@ -365,19 +363,12 @@ export function buildScene(kind:string,nodes:PNode[],root:number,orientation:'ve
     const bus=parentDepth+Math.max(24,(minDepth-parentDepth)/2)+(fi%3)*10
     f.children.forEach(child=>{
       const n=pos.get(child.id)!
-      // 横向树也从已登记双亲中的配偶底部接出，子女在该婚姻分组下方。
-      const fromSpouseBelow=kind==='tree' && !vertical && f.parents.length===2
-      const startSide=radial?facing(anchor,{x:n.x+NODE_W/2,y:n.y+NODE_H/2}):vertical||fromSpouseBelow?'bottom':'right'
-      const endSide=radial?facing(n,{x:anchor.x+NODE_W/2,y:anchor.y+NODE_H/2}):vertical||fromSpouseBelow?'top':'left'
+      // 纵向从底部接出；横向从配偶右侧接出，下一代从左侧进入。
+      const startSide=radial?facing(anchor,{x:n.x+NODE_W/2,y:n.y+NODE_H/2}):vertical?'bottom':'right'
+      const endSide=radial?facing(n,{x:anchor.x+NODE_W/2,y:anchor.y+NODE_H/2}):vertical?'top':'left'
       const start=port(anchor,startSide),end=port(n,endSide),from=escape(start,startSide,radial?8:16),to=escape(end,endSide,radial?8:16)
       let points:Point[]
-      if(fromSpouseBelow){
-        // 单个子女直接向下；多个子女使用配偶左侧的公共分叉线，避免穿过兄姐卡片。
-        const via={x:anchor.x-24,y:from.y},branch={x:via.x,y:to.y}
-        points=childPositions.length===1?simplify([start,...route(from,to,cards),end])
-          :simplify([start,...route(from,via,cards),...route(via,branch,cards).slice(1),...route(branch,to,cards).slice(1),end])
-      }
-      else if(radial)points=simplify([start,...route(from,to,cards),end])
+      if(radial)points=simplify([start,...route(from,to,cards),end])
       else{
         const via=vertical?{x:from.x,y:bus}:{x:bus,y:from.y}
         const branch=vertical?{x:to.x,y:bus}:{x:bus,y:to.y}

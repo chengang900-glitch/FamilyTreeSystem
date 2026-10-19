@@ -107,10 +107,11 @@ def init_db(schema_path):
 
     from server.db.migrate import ensure_constraints
     ensure_constraints(con, schema_path)
-    from server.db.migrate import ensure_profile_fields, ensure_child_order
+    from server.db.migrate import ensure_profile_fields, ensure_child_order, ensure_person_types
     from pathlib import Path
     ensure_profile_fields(con, current_app.config.get('BACKUP_DIR', Path(current_app.config['DB_PATH']).parent / 'backups'))
     ensure_child_order(con, current_app.config.get('BACKUP_DIR', Path(current_app.config['DB_PATH']).parent / 'backups'))
+    ensure_person_types(con, current_app.config.get('BACKUP_DIR', Path(current_app.config['DB_PATH']).parent / 'backups'))
     # 历史库可能残留绝对路径/../ 形式的 storage_path，启动时清空（不删文件）
     from server.service.filepath import sanitize_resource_paths
     sanitize_resource_paths(con)

@@ -125,6 +125,7 @@ export default function PrintBook() {
 
   return (
     <Card title="族谱付印">
+      <p style={{ color: '#666' }}>付印范围不包含“其他（男）”和“其他（女）”。</p>
       <Steps
         current={step}
         size="small"
@@ -162,6 +163,7 @@ export default function PrintBook() {
             <Space wrap>
               <span>主人物</span>
               <PersonSelect
+                allowedTypes={[1, 2, 3, 4, 5, 6]}
                 style={{ width: 240 }}
                 value={rootId}
                 onChange={setRootId}

@@ -59,10 +59,10 @@ check('再婚孩子分别对应母亲', (mom1,kid1) in pc and (mom2,kid2) in pc 
 
 # 父母身份按成员类型判定，候选分页和提交校验采用相同规则。
 typed = {}
-for kind in range(1, 7):
+for kind in range(1, 9):
     typed[kind] = c.post(base+'/persons', json={
         'name':f'类型候选{kind}', 'generation':1, 'type':kind}).get_json()['data']['id']
-for role, allowed in [('father_id', (1, 4, 5)), ('mother_id', (2, 3, 6))]:
+for role, allowed in [('father_id', (1, 4, 5, 7)), ('mother_id', (2, 3, 6, 8))]:
     for kind, parent in typed.items():
         with app.app_context():
             before = query_one('SELECT COUNT(*) c FROM parentchild WHERE family_id=?', (fid,))['c']
@@ -76,9 +76,9 @@ for role, allowed in [('father_id', (1, 4, 5)), ('mother_id', (2, 3, 6))]:
         'types':','.join(map(str, allowed)), 'keyword':'类型候选', 'size':2}).get_json()['data']
     second = c.get(base+'/persons', query_string={
         'types':','.join(map(str, allowed)), 'keyword':'类型候选', 'size':2, 'page':2}).get_json()['data']
-    check(f'{role} 候选先筛选再分页', result['total']==3 and len(result['items'])==2
+    check(f'{role} 候选先筛选再分页', result['total']==4 and len(result['items'])==2
           and {p['type'] for p in result['items']+second['items']}==set(allowed))
-check('候选类型参数拒绝非法类型', c.get(base+'/persons?types=1,7').status_code==400)
+check('候选类型参数拒绝非法类型', c.get(base+'/persons?types=1,9').status_code==400)
 c.post(base+'/parentchild', json={'parent_id':other, 'child_id':kid1, 'type':1})
 with app.app_context():
     before = query_one('SELECT COUNT(*) c FROM parentchild WHERE family_id=?', (fid,))['c']

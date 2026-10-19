@@ -179,7 +179,7 @@ export default function Pedigree() {
             {scene.nodes.map(l => <g key={l.id} data-person={l.id} transform={`translate(${l.x} ${l.y})`} opacity={!selected || related.has(l.id) ? 1 : .35}
               onClick={() => { if (!moved.current) setSelected(l.node) }} style={{ cursor: 'pointer' }}>
               <title>{l.node.name} · 第{l.node.generation}世 · {PERSON_TYPES[l.node.type]}</title>
-              <rect width={NODE_W} height={NODE_H} rx={7} fill={[1, 4, 5].includes(l.node.type) ? '#f4f0e8' : '#fdf3f0'}
+              <rect width={NODE_W} height={NODE_H} rx={7} fill={[1, 4, 5, 7].includes(l.node.type) ? '#f4f0e8' : '#fdf3f0'}
                 stroke={selected?.id === l.id ? '#8c6b4f' : '#d9cdbd'} strokeWidth={selected?.id === l.id ? 2.5 : 1} />
               <text x={NODE_W / 2} y={25} textAnchor="middle" fontSize={14} fill="#333">{l.node.name.length > 9 ? l.node.name.slice(0, 8) + '…' : l.node.name}</text>
               <text x={NODE_W / 2} y={45} textAnchor="middle" fontSize={11} fill="#777">第{l.node.generation}世 · {PERSON_TYPES[l.node.type]}</text>

@@ -1,5 +1,5 @@
 export const PERSON_TYPES: Record<number, string> = {
-  1: '宗男', 2: '宗女', 3: '姻媳', 4: '姻婿', 5: '外孙', 6: '外孙女',
+  1: '宗男', 2: '宗女', 3: '姻媳', 4: '姻婿', 5: '外孙', 6: '外孙女', 7: '其他（男）', 8: '其他（女）',
 }
 
 export const PC_TYPES: Record<number, string> = {

@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS person (
   name TEXT NOT NULL,
   courtesy_name TEXT,
   art_name TEXT,
-  type INTEGER NOT NULL DEFAULT 1 CHECK (type BETWEEN 1 AND 6),
+  type INTEGER NOT NULL DEFAULT 1 CHECK (type BETWEEN 1 AND 8),
   birth_date TEXT,
   birth_date_iso TEXT,
   birth_date_precision TEXT,

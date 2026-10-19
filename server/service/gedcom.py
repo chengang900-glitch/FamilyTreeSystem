@@ -12,7 +12,7 @@ def _number(value, default=1):
 
 def dumps(data):
     persons = {p['id']: p for p in data.get('persons', [])}
-    sex = lambda p: 'M' if p.get('type') in (1, 4, 5) else 'F'
+    sex = lambda p: 'M' if p.get('type') in (1, 4, 5, 7) else 'F'
     families, parents, types, orders = [], defaultdict(set), {}, {}
     for pc in data.get('parentchild', []):
         parent, child = pc.get('parent_id'), pc.get('child_id')
