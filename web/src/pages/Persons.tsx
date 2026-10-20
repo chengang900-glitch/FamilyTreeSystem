@@ -8,6 +8,10 @@ import { useStore } from '../store'
 import { PERSON_TYPES } from '../constants'
 import DateInput from '../components/DateInput'
 
+const PERSON_TYPE_COLORS: Record<number, string> = {
+  1: 'blue', 2: 'purple', 3: 'purple', 4: 'blue', 5: 'blue', 6: 'purple', 7: 'blue', 8: 'purple',
+}
+
 interface Row {
   id: number
   generation: number
@@ -116,7 +120,7 @@ export default function Persons() {
       dataIndex: 'type',
       width: 80,
       render: (t: number) => (
-        <Tag color={t === 1 ? 'blue' : t === 2 ? 'purple' : 'default'}>{PERSON_TYPES[t]}</Tag>
+        <Tag color={PERSON_TYPE_COLORS[t] || 'default'}>{PERSON_TYPES[t]}</Tag>
       ),
     },
     {
@@ -273,7 +277,7 @@ export default function Persons() {
               <Space direction="vertical" size={2} style={{ width: '100%' }}>
                 <Space>
                   <b>{r.name}</b>
-                  <Tag color={r.type === 1 ? 'blue' : 'purple'}>{PERSON_TYPES[r.type]}</Tag>
+                  <Tag color={PERSON_TYPE_COLORS[r.type] || 'default'}>{PERSON_TYPES[r.type]}</Tag>
                   <span style={{ color: '#888', fontSize: 12 }}>第{r.generation}世</span>
                 </Space>
                 <span style={{ fontSize: 12, color: '#666' }}>
@@ -369,7 +373,7 @@ export default function Persons() {
             <Form.Item name="branch_id" label="所属分支">
               <Select
                 allowClear
-                style={{ width: 160 }}
+                style={{ width: 356 }}
                 options={branches.map((b) => ({ value: b.id, label: b.name }))}
               />
             </Form.Item>
