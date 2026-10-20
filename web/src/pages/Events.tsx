@@ -4,7 +4,7 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import { useStore } from '../store'
+import { isMobile, useStore } from '../store'
 import PersonSelect from '../components/PersonSelect'
 import DateInput from '../components/DateInput'
 import ColumnSettings, { useColumnSettings } from '../components/ColumnSettings'
@@ -30,8 +30,12 @@ export default function Events() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const size = user?.page_size || 50
-  const [view, setView] = useState<'table' | 'card'>(
-    () => (localStorage.getItem('fts_event_view') === 'card' ? 'card' : 'table'))
+  const mobile = isMobile()
+  const viewKey = mobile ? 'fts_event_view_mobile' : 'fts_event_view'
+  const [view, setView] = useState<'table' | 'card'>(() => {
+    const saved = localStorage.getItem(viewKey)
+    return saved === 'table' || saved === 'card' ? saved : mobile ? 'card' : 'table'
+  })
   const cols = useColumnSettings<any>('fts_event_cols')
   const columnMeta = [
     { key: 'name', title: '事件名称' },
@@ -124,7 +128,7 @@ export default function Events() {
           onChange={(v) => {
             const next = v as 'table' | 'card'
             setView(next)
-            localStorage.setItem('fts_event_view', next)
+            localStorage.setItem(viewKey, next)
           }}
           options={[{ value: 'table', label: '列表' }, { value: 'card', label: '卡片' }]}
         />

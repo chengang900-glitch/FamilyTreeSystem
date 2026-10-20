@@ -10,7 +10,6 @@ import PersonSelect from '../components/PersonSelect'
 import PdfPreview from '../components/PdfPreview'
 
 const TEMPLATES = [
-  { value: 'original', label: '原版', description: 'PDF 双栏；Word 人物表格' },
   { value: 'traditional', label: '传统竖排分栏式', description: '分世横栏、竖排正文、右侧谱名堂号' },
   { value: 'european', label: '横行体', description: '五世分格，世次从右向左，人名附传' },
   { value: 'compilation', label: '汇编体', description: '按世代逐人编排，单栏人物条目' },
@@ -27,12 +26,12 @@ export default function PrintBook() {
   const [addCover, setAddCover] = useState(true)
   const [compiler, setCompiler] = useState('')
   const [paper, setPaper] = useState('A4')
-  const [template, setTemplate] = useState('original')
+  const [template, setTemplate] = useState('traditional')
   const [preview, setPreview] = useState<{ url: string; blob: Blob } | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const previewSerial = useRef(0)
-  const wordAllowed = template === 'original' || template === 'compilation'
+  const wordAllowed = template === 'compilation'
   const templateLabel = TEMPLATES.find(t => t.value === template)!.label
   const [fmt, setFmt] = useState<'pdf' | 'docx'>('pdf')
   const [est, setEst] = useState<any>(null)
@@ -254,7 +253,7 @@ export default function PrintBook() {
             />
           </Space>
           <Tag color="blue" style={{ whiteSpace: 'normal' }}>{templateLabel}：{TEMPLATES.find(t => t.value === template)!.description}</Tag>
-          {!wordAllowed && <span>此模板提供 PDF 预览和导出；需要可编辑 Word 时请选择原版或汇编体。</span>}
+          {!wordAllowed && <span>此模板提供 PDF 预览和导出；需要可编辑 Word 时请选择汇编体。</span>}
           {preview && <Tag color="green">PDF 导出与本次预览文件一致</Tag>}
           {est && <Tag>核心成员 {est.persons} 人，PDF 预估 {est.pages} 页</Tag>}
         </Space>
